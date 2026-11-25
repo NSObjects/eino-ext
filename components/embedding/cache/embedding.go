@@ -19,6 +19,7 @@ package cache
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/cloudwego/eino/components/embedding"
@@ -124,6 +125,11 @@ func (e *Embedder) EmbedStrings(ctx context.Context, texts []string, opts ...emb
 		uncachedEmbeddings, err := e.embedder.EmbedStrings(ctx, uncachedTexts, opts...)
 		if err != nil {
 			return nil, err
+		}
+
+		// Reject malformed provider results before publishing any cache entries.
+		if len(uncachedEmbeddings) != len(uncachedTexts) {
+			return nil, fmt.Errorf("embedding/cache: unexpected embedding count: expected %d, got %d", len(uncachedTexts), len(uncachedEmbeddings))
 		}
 
 		// Cache the uncachedEmbeddings

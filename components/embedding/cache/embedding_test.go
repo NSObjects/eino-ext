@@ -19,6 +19,7 @@ package cache
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -198,4 +199,72 @@ func TestEmbedder_EmbedStrings(t *testing.T) {
 		mc.AssertExpectations(t)
 		me.AssertExpectations(t)
 	})
+}
+
+
+func TestEmbedderRejectsInvalidEmbeddingCount(t *testing.T) {
+	ctx := context.Background()
+	for _, partialHit := range []bool{false, true} {
+		for _, returned := range []int{0, 1, 3} {
+			t.Run(fmt.Sprintf("partial_hit_%t/returned_%d", partialHit, returned), func(t *testing.T) {
+				mc := new(mockCacher)
+				me := new(mockEmbedder)
+				e, err := NewEmbedder(me, WithCacher(mc), WithGenerator(NewSimpleGenerator()))
+				require.NoError(t, err)
+
+				texts := []string{"first", "second"}
+				if partialHit {
+					texts = []string{"first", "cached", "second"}
+					mc.On("Get", mock.Anything, e.generator.Generate(ctx, "cached", GeneratorOption{})).
+						Return([]float64{99}, true, nil).Once()
+				}
+				for _, text := range []string{"first", "second"} {
+					mc.On("Get", mock.Anything, e.generator.Generate(ctx, text, GeneratorOption{})).
+						Return(nil, false, nil).Once()
+				}
+				vectors := make([][]float64, returned)
+				for i := range vectors {
+					vectors[i] = []float64{float64(i)}
+				}
+				me.On("EmbedStrings", mock.Anything, []string{"first", "second"}, mock.Anything).
+					Return(vectors, nil).Once()
+
+				result, err := e.EmbedStrings(ctx, texts)
+				require.ErrorContains(t, err, fmt.Sprintf("expected 2, got %d", returned))
+				require.Nil(t, result)
+				mc.AssertNumberOfCalls(t, "Set", 0)
+				mc.AssertExpectations(t)
+				me.AssertExpectations(t)
+			})
+		}
+	}
+}
+
+func TestEmbedderPreservesMixedCacheResultOrder(t *testing.T) {
+	ctx := context.Background()
+	mc := new(mockCacher)
+	me := new(mockEmbedder)
+	e, err := NewEmbedder(me, WithCacher(mc), WithGenerator(NewSimpleGenerator()), WithExpiration(time.Minute))
+	require.NoError(t, err)
+
+	texts := []string{"first", "cached", "second"}
+	for _, text := range []string{"first", "second"} {
+		mc.On("Get", mock.Anything, e.generator.Generate(ctx, text, GeneratorOption{})).
+			Return(nil, false, nil).Once()
+	}
+	mc.On("Get", mock.Anything, e.generator.Generate(ctx, "cached", GeneratorOption{})).
+		Return([]float64{99}, true, nil).Once()
+	me.On("EmbedStrings", mock.Anything, []string{"first", "second"}, mock.Anything).
+		Return([][]float64{{1}, {2}}, nil).Once()
+	mc.On("Set", mock.Anything, e.generator.Generate(ctx, "first", GeneratorOption{}), []float64{1}, time.Minute).
+		Return(nil).Once()
+	mc.On("Set", mock.Anything, e.generator.Generate(ctx, "second", GeneratorOption{}), []float64{2}, time.Minute).
+		Return(nil).Once()
+
+	result, err := e.EmbedStrings(ctx, texts)
+	require.NoError(t, err)
+	require.Equal(t, [][]float64{{1}, {99}, {2}}, result)
+	mc.AssertNumberOfCalls(t, "Set", 2)
+	mc.AssertExpectations(t)
+	me.AssertExpectations(t)
 }
