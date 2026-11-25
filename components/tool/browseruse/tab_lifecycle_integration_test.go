@@ -1,0 +1,94 @@
+/*
+ * Copyright 2025 CloudWeGo Authors
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package browseruse
+
+import (
+	"context"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"testing"
+	"time"
+
+	"github.com/chromedp/chromedp"
+	"github.com/stretchr/testify/require"
+)
+
+// This integration regression is opt-in for local developers. CI explicitly
+// provides a Chrome executable. Only locally served test pages are visited.
+func TestBrowserUseIntegrationReusesManagedTabContexts(t *testing.T) {
+	chrome := os.Getenv("EINO_BROWSERUSE_CHROME")
+	if chrome == "" {
+		t.Skip("set EINO_BROWSERUSE_CHROME to a Chrome executable")
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		_, _ = fmt.Fprint(w, "<html><body><button>test</button></body></html>")
+	}))
+	defer server.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	defer cancel()
+	created := 0
+	b, err := newBrowserUseTool(ctx, &Config{
+		Headless:           true,
+		ChromeInstancePath: chrome,
+		ExtraChromiumArgs:  []string{"disable-dev-shm-usage"},
+	}, func(parent context.Context, opts ...chromedp.ContextOption) (context.Context, context.CancelFunc) {
+		created++
+		return chromedp.NewContext(parent, opts...)
+	})
+	require.NoError(t, err)
+	t.Cleanup(b.Cleanup)
+
+	run := func(param *Param) {
+		t.Helper()
+		result, err := b.Execute(param)
+		require.NoError(t, err)
+		require.NotNil(t, result)
+		require.Empty(t, result.Error)
+	}
+	firstURL, secondURL := server.URL+"/first", server.URL+"/second"
+	run(&Param{Action: ActionGoToURL, URL: &firstURL})
+	run(&Param{Action: ActionOpenTab, URL: &secondURL})
+	require.Equal(t, 2, created)
+	afterOpen := created
+
+	// Both targets already have a live context. Switching should reuse
+	// their existing contexts instead of creating another CDP session.
+	for i := 0; i < 3; i++ {
+		for _, url := range []string{firstURL, secondURL} {
+			require.NoError(t, b.updateTabsInfo(b.ctx))
+			found := false
+			for _, tab := range b.tabs {
+				if tab.URL != url {
+					continue
+				}
+				id := tab.ID
+				run(&Param{Action: ActionSwitchTab, TabID: &id})
+				var currentURL string
+				require.NoError(t, chromedp.Run(b.ctx, chromedp.Location(&currentURL)))
+				require.Equal(t, url, currentURL)
+				found = true
+				break
+			}
+			require.True(t, found, "missing tab: %s", url)
+		}
+	}
+	require.Equal(t, afterOpen, created, "switching managed tabs should not allocate additional contexts")
+}
