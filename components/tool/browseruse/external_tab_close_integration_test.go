@@ -41,7 +41,7 @@ func TestBrowserUseIntegrationReconcilesExternallyClosedTab(t *testing.T) {
 	}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html")
-		_, _ = fmt.Fprint(w, "<html><body>test</body></html>")
+		_, _ = fmt.Fprint(w, "<html><body><button>test</button></body></html>")
 	}))
 	defer server.Close()
 

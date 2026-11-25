@@ -48,6 +48,7 @@ func TestBrowserUseIntegrationReusesManagedTabContexts(t *testing.T) {
 	var root context.Context
 	var parents []context.Context
 	var children []context.Context
+	cancelCalls := make([]int, 0)
 	b, err := newBrowserUseTool(ctx, &Config{
 		Headless:           true,
 		ChromeInstancePath: chrome,
@@ -57,10 +58,15 @@ func TestBrowserUseIntegrationReusesManagedTabContexts(t *testing.T) {
 		parents = append(parents, parent)
 		child, cancelChild := chromedp.NewContext(parent, opts...)
 		children = append(children, child)
+		index := len(children) - 1
+		cancelCalls = append(cancelCalls, 0)
 		if created == 1 {
 			root = child
 		}
-		return child, cancelChild
+		return child, func() {
+			cancelCalls[index]++
+			cancelChild()
+		}
 	})
 	require.NoError(t, err)
 	t.Cleanup(b.Cleanup)
@@ -122,6 +128,8 @@ func TestBrowserUseIntegrationReusesManagedTabContexts(t *testing.T) {
 	require.Equal(t, 4, created)
 	require.Len(t, b.tabContexts, 3)
 	require.ErrorIs(t, children[3].Err(), context.Canceled)
+	require.Equal(t, 1, cancelCalls[3])
+	require.Len(t, b.tabCancels, 2)
 
 	// Closing a managed tab should select an existing attachment, not
 	// allocate another context or accidentally close a sibling.
@@ -129,6 +137,11 @@ func TestBrowserUseIntegrationReusesManagedTabContexts(t *testing.T) {
 	require.NotEmpty(t, closedID)
 	run(&Param{Action: ActionCloseTab})
 	require.NotContains(t, b.tabContexts, closedID)
+	require.NotContains(t, b.tabCancels, closedID)
+	require.ErrorIs(t, children[2].Err(), context.Canceled)
+	require.Equal(t, 1, cancelCalls[2])
+	require.NoError(t, root.Err())
+	require.NoError(t, children[1].Err())
 	require.Len(t, b.tabContexts, 2)
 	require.Equal(t, 4, created)
 	require.NotEqual(t, closedID, browserTargetID(b.ctx))
@@ -150,6 +163,9 @@ func TestBrowserUseIntegrationReusesManagedTabContexts(t *testing.T) {
 	require.True(t, foundRoot)
 	run(&Param{Action: ActionCloseTab})
 	require.NotContains(t, b.tabContexts, rootID)
+	require.NoError(t, root.Err())
+	require.Zero(t, cancelCalls[0])
+	require.NoError(t, children[1].Err())
 	require.Len(t, b.tabContexts, 1)
 	require.Equal(t, 4, created)
 	var remainingURL string
@@ -161,4 +177,23 @@ func TestBrowserUseIntegrationReusesManagedTabContexts(t *testing.T) {
 	require.Equal(t, 5, created)
 	require.Equal(t, root, parents[4])
 	require.Len(t, b.tabContexts, 2)
+	require.Len(t, b.tabCancels, 2)
+
+	// Repeat open/close with one survivor: all newly closed children
+	// must be canceled exactly once, while the survivor stays live.
+	for i := 0; i < 3; i++ {
+		url := fmt.Sprintf("%s/cycle-%d", server.URL, i)
+		run(&Param{Action: ActionOpenTab, URL: &url})
+		index := len(children) - 1
+		id := browserTargetID(b.ctx)
+		run(&Param{Action: ActionCloseTab})
+		require.ErrorIs(t, children[index].Err(), context.Canceled)
+		require.Equal(t, 1, cancelCalls[index])
+		require.NotContains(t, b.tabCancels, id)
+		require.Len(t, b.tabContexts, 2)
+		require.Len(t, b.tabCancels, 2)
+		require.NoError(t, root.Err())
+		require.NoError(t, children[1].Err())
+		require.NoError(t, children[4].Err())
+	}
 }
