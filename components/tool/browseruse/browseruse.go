@@ -289,8 +289,8 @@ func (b *Tool) initialize(ctx context.Context, config *Config) error {
 		return fmt.Errorf("config is required")
 	}
 
-	if b.ctx != nil {
-		b.Cleanup()
+	if b.ctx != nil || b.allocatorCancel != nil {
+		b.cleanupLocked()
 	}
 
 	opts := []chromedp.ExecAllocatorOption{
@@ -322,6 +322,12 @@ func (b *Tool) initialize(ctx context.Context, config *Config) error {
 	}
 
 	b.allocatorCtx, b.allocatorCancel = chromedp.NewExecAllocator(ctx, opts...)
+	initialized := false
+	defer func() {
+		if !initialized {
+			b.cleanupLocked()
+		}
+	}()
 
 	logf := func(string, ...any) {}
 	if config.Logf != nil {
@@ -333,13 +339,14 @@ func (b *Tool) initialize(ctx context.Context, config *Config) error {
 	)
 
 	if err := chromedp.Run(b.ctx); err != nil {
-		return fmt.Errorf("failed to start browser: %v", err)
+		return fmt.Errorf("failed to start browser: %w", err)
 	}
 
 	if err := b.updateTabsInfo(b.ctx); err != nil {
-		return fmt.Errorf("failed to update tab info: %v", err)
+		return fmt.Errorf("failed to update tab info: %w", err)
 	}
 
+	initialized = true
 	return nil
 }
 
@@ -750,7 +757,12 @@ func calculateVisible(ctx context.Context, node *cdp.Node) (bool, error) {
 func (b *Tool) Cleanup() {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	b.cleanupLocked()
+}
 
+// cleanupLocked releases the allocator and clears browser state.
+// The caller must hold b.mu.
+func (b *Tool) cleanupLocked() {
 	if b.allocatorCancel != nil {
 		b.allocatorCancel()
 		b.allocatorCancel = nil
@@ -760,6 +772,7 @@ func (b *Tool) Cleanup() {
 	b.allocatorCtx = nil
 	b.elements = nil
 	b.tabs = nil
+	b.currentTabID = 0
 }
 
 func (b *Tool) GetCurrentState() (*BrowserState, error) {
