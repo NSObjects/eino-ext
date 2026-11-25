@@ -116,3 +116,69 @@ func TestStoreDuplicateEmbedKey(t *testing.T) {
 		})
 	}
 }
+
+
+func TestStoreEmbedKeyScopeAcrossBatches(t *testing.T) {
+	for _, invalid := range []bool{false, true} {
+		name := "same vector field in different documents"
+		if invalid {
+			name = "duplicate vector field in later document"
+		}
+		t.Run(name, func(t *testing.T) {
+			ctx := context.Background()
+			client := redisclient.NewClient(&redisclient.Options{Addr: "unused:6379"})
+			defer client.Close()
+			hook := &recordingPipelineHook{}
+			client.AddHook(hook)
+			embedder := &recordingEmbedder{}
+			idx, err := NewIndexer(ctx, &IndexerConfig{
+				Client: client, Embedding: embedder, BatchSize: 2,
+				DocumentToHashes: func(ctx context.Context, doc *schema.Document) (*Hashes, error) {
+					fields := map[string]FieldValue{
+						"title": {Value: doc.Content, EmbedKey: "title_vector"},
+						"body":  {Value: "body", EmbedKey: "body_vector"},
+					}
+					if invalid && doc.ID == "second" {
+						fields["body"] = FieldValue{Value: "body", EmbedKey: "title_vector"}
+					}
+					return &Hashes{Key: doc.ID, Field2Value: fields}, nil
+				},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			ids, err := idx.Store(ctx, []*schema.Document{
+				{ID: "first", Content: "one"},
+				{ID: "second", Content: "second"},
+			})
+			if invalid {
+				if err == nil || !strings.Contains(err.Error(), "duplicate") || ids != nil {
+					t.Fatalf("expected duplicate error and no IDs, got %v, %v", ids, err)
+				}
+				if embedder.calls != 1 || len(hook.commands) != 0 {
+					t.Fatalf("expected first batch embedded but no Redis writes, calls=%d, commands=%v", embedder.calls, hook.commands)
+				}
+				return
+			}
+			if err != nil || len(ids) != 2 || len(hook.commands) != 2 || embedder.calls != 2 {
+				t.Fatalf("unexpected result: ids=%v, err=%v, calls=%d, commands=%v", ids, err, embedder.calls, hook.commands)
+			}
+			for i, want := range []float64{3, 6} {
+				args := hook.commands[i].Args()
+				found := false
+				for j := 2; j < len(args); j += 2 {
+					if args[j] == "title_vector" {
+						got := float64(math.Float32frombits(binary.LittleEndian.Uint32(args[j+1].([]byte))))
+						if got != want {
+							t.Fatalf("document %d vector = %v, want %v", i, got, want)
+						}
+						found = true
+					}
+				}
+				if !found {
+					t.Fatalf("document %d has no title vector", i)
+				}
+			}
+		})
+	}
+}
