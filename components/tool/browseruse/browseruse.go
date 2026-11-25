@@ -371,6 +371,17 @@ func (b *Tool) updateTabsInfo(ctx context.Context) error {
 	return nil
 }
 
+// targetForTabID resolves the ID advertised in the latest tab snapshot.
+// IDs may be sparse because non-page targets are filtered out.
+func (b *Tool) targetForTabID(id int) (target.ID, bool) {
+	for _, tab := range b.tabs {
+		if tab.ID == id {
+			return tab.TargetID, true
+		}
+	}
+	return "", false
+}
+
 type Param struct {
 	Action Action `json:"action"`
 
@@ -623,11 +634,10 @@ func (b *Tool) Execute(params *Param) (*ToolResult, error) {
 		}
 		tabID := *params.TabID
 
-		if tabID < 0 || tabID >= len(b.tabs) {
+		targetID, found := b.targetForTabID(tabID)
+		if !found {
 			return &ToolResult{Error: fmt.Sprintf("tab ID %d out of range", tabID)}, nil
 		}
-
-		targetID := b.tabs[tabID].TargetID
 
 		newCtx, _ := b.createContext(b.ctx, chromedp.WithTargetID(targetID))
 		err := chromedp.Run(newCtx, target.ActivateTarget(targetID))
