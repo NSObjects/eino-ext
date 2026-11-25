@@ -97,7 +97,19 @@ func TestBrowserUseIntegrationReconcilesExternallyClosedTab(t *testing.T) {
 	}
 	assert.NotContains(t, b.tabContexts, closedID, "closed target attachment must not remain cached")
 	assert.ErrorIs(t, closedCtx.Err(), context.Canceled, "owned child context must be released")
+	assert.NotContains(t, b.tabCancels, closedID)
+	assert.Len(t, b.tabContexts, 2)
+	assert.Len(t, b.tabCancels, 1)
 	assert.Equal(t, active, b.ctx)
 	assert.NoError(t, active.Err())
 	assert.NoError(t, b.browserCtx.Err())
+
+	// Repeated snapshots must preserve the active sibling and must not
+	// reintroduce the closed target or invoke its cancellation again.
+	state, err = b.GetCurrentState()
+	require.NoError(t, err)
+	require.Equal(t, server.URL+"/survivor", state.URL)
+	require.Len(t, b.tabContexts, 2)
+	require.Len(t, b.tabCancels, 1)
+	require.NoError(t, active.Err())
 }

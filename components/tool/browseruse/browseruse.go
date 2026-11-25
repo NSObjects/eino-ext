@@ -343,7 +343,7 @@ func (b *Tool) openTab(url string) error {
 	return nil
 }
 
-// releaseClosedTab is called only after a successful page close, under b.mu.
+// releaseClosedTab releases a confirmed closed target under b.mu.
 // The root context is deliberately not registered in tabCancels: closing its
 // page must not cancel the browser or the remaining sibling tabs.
 func (b *Tool) releaseClosedTab(id target.ID) {
@@ -432,6 +432,10 @@ func (b *Tool) updateTabsInfo(ctx context.Context) error {
 		return err
 	}
 
+	// Reconcile against all targets, not just the filtered page list.
+	// A failed Targets request must not be interpreted as a closed tab.
+	b.reconcileInactiveTabs(targets)
+
 	b.tabs = make([]TabInfo, 0)
 	for i, t := range targets {
 		if t.Type == "page" {
@@ -445,6 +449,25 @@ func (b *Tool) updateTabsInfo(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+// reconcileInactiveTabs releases attachments that have disappeared from a
+// successful browser target snapshot. Active-target recovery is handled
+// separately; do not cancel the currently selected context here.
+func (b *Tool) reconcileInactiveTabs(targets []*target.Info) {
+	live := make(map[target.ID]struct{}, len(targets))
+	for _, info := range targets {
+		live[info.TargetID] = struct{}{}
+	}
+	activeID := browserTargetID(b.ctx)
+	for id := range b.tabContexts {
+		if id == activeID {
+			continue
+		}
+		if _, ok := live[id]; !ok {
+			b.releaseClosedTab(id)
+		}
+	}
 }
 
 // targetForTabID resolves the ID advertised in the latest tab snapshot.
@@ -764,7 +787,7 @@ func (b *Tool) Execute(params *Param) (*ToolResult, error) {
 func (b *Tool) updateElements(ctx context.Context) error {
 	var nodes []*cdp.Node
 	err := chromedp.Run(ctx,
-		chromedp.Nodes("a, button, input, select, textarea", &nodes, chromedp.ByQueryAll),
+		chromedp.Nodes("a, button, input, select, textarea", &nodes, chromedp.ByQueryAll, chromedp.AtLeast(0)),
 	)
 	if err != nil {
 		return err
