@@ -764,7 +764,7 @@ func (b *Tool) Execute(params *Param) (*ToolResult, error) {
 func (b *Tool) updateElements(ctx context.Context) error {
 	var nodes []*cdp.Node
 	err := chromedp.Run(ctx,
-		chromedp.Nodes("a, button, input, select, textarea", &nodes, chromedp.ByQueryAll),
+		chromedp.Nodes("a, button, input, select, textarea", &nodes, chromedp.ByQueryAll, chromedp.AtLeast(0)),
 	)
 	if err != nil {
 		return err
