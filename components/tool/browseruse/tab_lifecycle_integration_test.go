@@ -47,6 +47,7 @@ func TestBrowserUseIntegrationReusesManagedTabContexts(t *testing.T) {
 	created := 0
 	var root context.Context
 	var parents []context.Context
+	var children []context.Context
 	b, err := newBrowserUseTool(ctx, &Config{
 		Headless:           true,
 		ChromeInstancePath: chrome,
@@ -55,6 +56,7 @@ func TestBrowserUseIntegrationReusesManagedTabContexts(t *testing.T) {
 		created++
 		parents = append(parents, parent)
 		child, cancelChild := chromedp.NewContext(parent, opts...)
+		children = append(children, child)
 		if created == 1 {
 			root = child
 		}
@@ -107,4 +109,56 @@ func TestBrowserUseIntegrationReusesManagedTabContexts(t *testing.T) {
 	require.Len(t, b.tabContexts, 3)
 	require.Equal(t, root, parents[1])
 	require.Equal(t, root, parents[2], "new tabs must share the stable browser parent")
+
+	// A navigation failure must not change the active tab or retain a
+	// newly created context. The two existing sibling tabs must survive.
+	active := b.ctx
+	invalidURL := "http://["
+	failed, err := b.Execute(&Param{Action: ActionOpenTab, URL: &invalidURL})
+	require.NoError(t, err)
+	require.NotNil(t, failed)
+	require.NotEmpty(t, failed.Error)
+	require.Equal(t, active, b.ctx)
+	require.Equal(t, 4, created)
+	require.Len(t, b.tabContexts, 3)
+	require.ErrorIs(t, children[3].Err(), context.Canceled)
+
+	// Closing a managed tab should select an existing attachment, not
+	// allocate another context or accidentally close a sibling.
+	closedID := browserTargetID(b.ctx)
+	require.NotEmpty(t, closedID)
+	run(&Param{Action: ActionCloseTab})
+	require.NotContains(t, b.tabContexts, closedID)
+	require.Len(t, b.tabContexts, 2)
+	require.Equal(t, 4, created)
+	require.NotEqual(t, closedID, browserTargetID(b.ctx))
+	require.NoError(t, chromedp.Run(b.ctx, chromedp.Location(new(string))))
+
+	// The first tab is also the browser root. Closing its page must not
+	// invalidate the remaining tab's attachment or prevent new tabs.
+	rootID := browserTargetID(root)
+	require.NoError(t, b.updateTabsInfo(b.ctx))
+	foundRoot := false
+	for _, tab := range b.tabs {
+		if tab.TargetID == rootID {
+			id := tab.ID
+			run(&Param{Action: ActionSwitchTab, TabID: &id})
+			foundRoot = true
+			break
+		}
+	}
+	require.True(t, foundRoot)
+	run(&Param{Action: ActionCloseTab})
+	require.NotContains(t, b.tabContexts, rootID)
+	require.Len(t, b.tabContexts, 1)
+	require.Equal(t, 4, created)
+	var remainingURL string
+	require.NoError(t, chromedp.Run(b.ctx, chromedp.Location(&remainingURL)))
+	require.Equal(t, secondURL, remainingURL)
+
+	fourthURL := server.URL + "/fourth"
+	run(&Param{Action: ActionOpenTab, URL: &fourthURL})
+	require.Equal(t, 5, created)
+	require.Equal(t, root, parents[4])
+	require.Len(t, b.tabContexts, 2)
 }
