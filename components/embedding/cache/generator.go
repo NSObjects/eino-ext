@@ -55,7 +55,8 @@ func (g *SimpleGenerator) Generate(_ context.Context, text string, opt Generator
 //
 // The generated key is the hex encoded digest of the wrapped generator's output, so it has a
 // constant length that depends only on the hash function, never on the input length. The
-// plaintext is not recoverable from the key.
+// key no longer directly contains the plaintext, but hashing alone does not
+// guarantee confidentiality of predictable inputs.
 //
 // Note: Because of the use of the [hash.Hash] algorithm, there is a probability that data
 // with different text and options will generate the same key. This is a trade-off
@@ -74,6 +75,8 @@ type HashGenerator struct {
 var _ Generator = (*HashGenerator)(nil)
 
 // NewHashGenerator creates a new [HashGenerator] with the specified hash function.
+// The generator takes exclusive ownership of hasher; do not share it across generators.
+// Use a pointer to HashGenerator and do not copy it after use.
 func NewHashGenerator(hasher hash.Hash) *HashGenerator {
 	return &HashGenerator{
 		SimpleGenerator: NewSimpleGenerator(),
