@@ -90,3 +90,18 @@ func TestEmptyAssistantWithAutoCache(t *testing.T) {
 		})
 	}
 }
+
+
+func TestEmptyToolResultExplicitCacheControl(t *testing.T) {
+	msg := SetMessageCacheControl(&schema.Message{
+		Role: schema.Tool, ToolCallID: "call_empty",
+	}, &CacheControl{TTL: CacheTTL5m})
+	got, err := convSchemaMessage(msg)
+	require.NoError(t, err)
+	require.Len(t, got.Content, 1)
+	block := got.Content[0].OfToolResult
+	require.NotNil(t, block)
+	require.Equal(t, "call_empty", block.ToolUseID)
+	require.Empty(t, block.Content)
+	require.Equal(t, CacheTTL5m, block.CacheControl.TTL)
+}
