@@ -31,19 +31,22 @@ import (
 	"github.com/cloudwego/eino-ext/components/tool/duckduckgo/v2"
 )
 
+func fakeBrowserContext(ctx context.Context, _ ...chromedp.ContextOption) (context.Context, context.CancelFunc) {
+	return ctx, func() {}
+}
+
 func TestNewBrowserUseTool(t *testing.T) {
 	ctx := context.Background()
 
 	defer mockey.Mock(chromedp.NewExecAllocator).Return(ctx, func() {}).Build().UnPatch()
-	defer mockey.Mock(chromedp.NewContext).Return(ctx, func() {}).Build().UnPatch()
 	defer mockey.Mock(chromedp.Run).Return(nil).Build().UnPatch()
 	defer mockey.Mock((*Tool).updateElements).Return(nil).Build().UnPatch()
 	defer mockey.Mock((*Tool).updateTabsInfo).Return(nil).Build().UnPatch()
 
-	tool, err := NewBrowserUseTool(ctx, &Config{
+	tool, err := newBrowserUseTool(ctx, &Config{
 		ChromeInstancePath: "test path",
 		ProxyServer:        "proxy server",
-	})
+	}, fakeBrowserContext)
 	assert.NoError(t, err)
 	assert.NotNil(t, tool)
 
@@ -55,7 +58,7 @@ func TestNewBrowserUseTool(t *testing.T) {
 }
 
 func TestExecute(t *testing.T) {
-	tool := &Tool{}
+	tool := &Tool{ctx: context.Background(), newContext: fakeBrowserContext}
 	defer mockey.Mock((*Tool).updateElements).Return(nil).Build().UnPatch()
 	defer mockey.Mock((*Tool).updateTabsInfo).Return(nil).Build().UnPatch()
 
@@ -113,7 +116,6 @@ func TestExecute(t *testing.T) {
 			},
 		}, nil).Build().UnPatch()
 		defer mockey.Mock(chromedp.Run).Return(nil).Build().UnPatch()
-		defer mockey.Mock(chromedp.NewContext).Return(context.Background(), func() {}).Build().UnPatch()
 
 		query := "test query"
 		result, err := tool.Execute(&Param{Action: ActionWebSearch, Query: &query})
@@ -344,4 +346,41 @@ func TestUpdateTabs(t *testing.T) {
 			URL:      "https://example.com",
 		},
 	}, tool.tabs)
+}
+
+
+func TestCreateContextDefault(t *testing.T) {
+	parent, cancelParent := context.WithCancel(context.Background())
+	defer cancelParent()
+	tool := &Tool{}
+	ctx, cancel := tool.createContext(parent)
+	assert.NotNil(t, chromedp.FromContext(ctx))
+	// chromedp v0.13.3 cancelWait consumes an allocation semaphore.
+	// Call it once: a second call on an unallocated context can block.
+	cancel()
+	assert.ErrorIs(t, ctx.Err(), context.Canceled)
+}
+
+func TestBrowserContextFactoryIsInstanceLocal(t *testing.T) {
+	parent := context.Background()
+	firstCalls, secondCalls := 0, 0
+	first := &Tool{newContext: func(ctx context.Context, opts ...chromedp.ContextOption) (context.Context, context.CancelFunc) {
+		firstCalls++
+		assert.Equal(t, parent, ctx)
+		assert.Len(t, opts, 1)
+		return context.WithCancel(ctx)
+	}}
+	second := &Tool{newContext: func(ctx context.Context, opts ...chromedp.ContextOption) (context.Context, context.CancelFunc) {
+		secondCalls++
+		return context.WithCancel(ctx)
+	}}
+	firstCtx, firstCancel := first.createContext(parent, chromedp.WithTargetID("first"))
+	defer firstCancel()
+	secondCtx, secondCancel := second.createContext(parent)
+	defer secondCancel()
+	firstCancel()
+	assert.ErrorIs(t, firstCtx.Err(), context.Canceled)
+	assert.NoError(t, secondCtx.Err())
+	assert.Equal(t, 1, firstCalls)
+	assert.Equal(t, 1, secondCalls)
 }
