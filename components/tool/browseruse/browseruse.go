@@ -122,6 +122,8 @@ type Tool struct {
 
 	mu              sync.Mutex
 	ctx             context.Context
+	browserCtx      context.Context
+	tabContexts     map[target.ID]context.Context
 	allocatorCtx    context.Context
 	allocatorCancel context.CancelFunc
 	elements        []ElementInfo
@@ -281,6 +283,59 @@ func (b *Tool) createContext(ctx context.Context, opts ...chromedp.ContextOption
 	return chromedp.NewContext(ctx, opts...)
 }
 
+// tabParent is the stable browser context, not the currently selected tab.
+func (b *Tool) tabParent() context.Context {
+	if b.browserCtx != nil {
+		return b.browserCtx
+	}
+	return b.ctx
+}
+
+func browserTargetID(ctx context.Context) target.ID {
+	if ctx == nil {
+		return ""
+	}
+	c := chromedp.FromContext(ctx)
+	if c == nil || c.Target == nil {
+		return ""
+	}
+	return c.Target.TargetID
+}
+
+// rememberTabContext records a successfully attached target. All calls hold b.mu.
+func (b *Tool) rememberTabContext(ctx context.Context) {
+	id := browserTargetID(ctx)
+	if id == "" {
+		return
+	}
+	if b.tabContexts == nil {
+		b.tabContexts = make(map[target.ID]context.Context)
+	}
+	b.tabContexts[id] = ctx
+}
+
+// contextForTarget reuses the attachment for a known live target.
+// A newly attached external target is recorded only after Run succeeds.
+func (b *Tool) contextForTarget(id target.ID) context.Context {
+	if ctx := b.tabContexts[id]; ctx != nil && ctx.Err() == nil {
+		return ctx
+	}
+	ctx, _ := b.createContext(b.tabParent(), chromedp.WithTargetID(id))
+	return ctx
+}
+
+func (b *Tool) openTab(url string) error {
+	ctx, cancel := b.createContext(b.tabParent())
+	if err := chromedp.Run(ctx, chromedp.Navigate(url), chromedp.WaitReady("body", chromedp.ByQuery)); err != nil {
+		// This context belongs to a newly created tab, not an existing target.
+		cancel()
+		return err
+	}
+	b.rememberTabContext(ctx)
+	b.ctx = ctx
+	return nil
+}
+
 func (b *Tool) initialize(ctx context.Context, config *Config) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -341,6 +396,8 @@ func (b *Tool) initialize(ctx context.Context, config *Config) error {
 	if err := chromedp.Run(b.ctx); err != nil {
 		return fmt.Errorf("failed to start browser: %w", err)
 	}
+	b.browserCtx = b.ctx
+	b.rememberTabContext(b.ctx)
 
 	if err := b.updateTabsInfo(b.ctx); err != nil {
 		return fmt.Errorf("failed to update tab info: %w", err)
@@ -554,14 +611,9 @@ func (b *Tool) Execute(params *Param) (*ToolResult, error) {
 		if len(searchResults.Results) == 0 {
 			return &ToolResult{Error: "search result is empty"}, nil
 		}
-		newCtx, _ := b.createContext(b.ctx)
-		if err := chromedp.Run(newCtx,
-			chromedp.Navigate(searchResults.Results[0].URL),
-			chromedp.WaitReady("body", chromedp.ByQuery),
-		); err != nil {
+		if err := b.openTab(searchResults.Results[0].URL); err != nil {
 			return &ToolResult{Error: fmt.Sprintf("failed to open new tab: %v", err)}, nil
 		}
-		b.ctx = newCtx
 
 		if err := b.updateTabsInfo(b.ctx); err != nil {
 			return &ToolResult{Error: fmt.Sprintf("failed to update tab information: %v", err)}, nil
@@ -610,14 +662,9 @@ func (b *Tool) Execute(params *Param) (*ToolResult, error) {
 		}
 		url := *params.URL
 
-		newCtx, _ := b.createContext(b.ctx)
-		if err := chromedp.Run(newCtx,
-			chromedp.Navigate(url),
-			chromedp.WaitReady("body", chromedp.ByQuery),
-		); err != nil {
+		if err := b.openTab(url); err != nil {
 			return &ToolResult{Error: fmt.Sprintf("failed to open new tab: %v", err)}, nil
 		}
-		b.ctx = newCtx
 
 		if err := b.updateTabsInfo(b.ctx); err != nil {
 			return &ToolResult{Error: fmt.Sprintf("failed to update tab information: %v", err)}, nil
@@ -639,12 +686,13 @@ func (b *Tool) Execute(params *Param) (*ToolResult, error) {
 			return &ToolResult{Error: fmt.Sprintf("tab ID %d out of range", tabID)}, nil
 		}
 
-		newCtx, _ := b.createContext(b.ctx, chromedp.WithTargetID(targetID))
+		newCtx := b.contextForTarget(targetID)
 		err := chromedp.Run(newCtx, target.ActivateTarget(targetID))
 		if err != nil {
 			return &ToolResult{Error: fmt.Sprintf("failed to switch tab: %v", err)}, nil
 		}
 
+		b.rememberTabContext(newCtx)
 		b.ctx = newCtx
 		b.currentTabID = tabID
 
@@ -658,27 +706,30 @@ func (b *Tool) Execute(params *Param) (*ToolResult, error) {
 		result = &ToolResult{Output: fmt.Sprintf("successfully switched to tab %d", tabID)}
 
 	case ActionCloseTab:
+		closedID := browserTargetID(b.ctx)
 		err := chromedp.Run(b.ctx, page.Close())
 
 		if err != nil {
 			return &ToolResult{Error: fmt.Sprintf("failed to close tab: %v", err)}, nil
 		}
 
+		delete(b.tabContexts, closedID)
 		if len(b.tabs) > 1 {
-			if err := b.updateTabsInfo(b.ctx); err != nil {
+			if err := b.updateTabsInfo(b.tabParent()); err != nil {
 				return &ToolResult{Error: fmt.Sprintf("failed to update tab information: %v", err)}, nil
 			}
 
 			if len(b.tabs) > 0 {
 				newTargetID := b.tabs[0].TargetID
 
-				newCtx, _ := b.createContext(b.ctx, chromedp.WithTargetID(newTargetID))
+				newCtx := b.contextForTarget(newTargetID)
 				b.ctx = newCtx
 				b.currentTabID = b.tabs[0].ID
 
 				if err := b.updateElements(b.ctx); err != nil {
 					return &ToolResult{Error: fmt.Sprintf("failed to update elements: %v", err)}, nil
 				}
+				b.rememberTabContext(newCtx)
 			}
 		}
 
@@ -779,6 +830,8 @@ func (b *Tool) cleanupLocked() {
 	}
 
 	b.ctx = nil
+	b.browserCtx = nil
+	b.tabContexts = nil
 	b.allocatorCtx = nil
 	b.elements = nil
 	b.tabs = nil

@@ -1,0 +1,31 @@
+name: BrowserUse Chrome integration
+on:
+  pull_request:
+    paths:
+      - 'components/tool/browseruse/**'
+      - '.github/workflows/browseruse-integration.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  chrome-integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25.6"
+          cache-dependency-path: components/tool/browseruse/go.sum
+      - name: Run real Chrome lifecycle regression
+        working-directory: components/tool/browseruse
+        env:
+          GOWORK: "off"
+        shell: bash
+        run: |
+          set -euo pipefail
+          export EINO_BROWSERUSE_CHROME="$(command -v google-chrome || command -v chromium)"
+          "$EINO_BROWSERUSE_CHROME" --version
+          go test -mod=readonly -count=1 -timeout=2m -v -run '^TestBrowserUseIntegration' .
