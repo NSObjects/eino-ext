@@ -354,8 +354,9 @@ func TestCreateContextDefault(t *testing.T) {
 	defer cancelParent()
 	tool := &Tool{}
 	ctx, cancel := tool.createContext(parent)
-	defer cancel()
 	assert.NotNil(t, chromedp.FromContext(ctx))
+	// chromedp v0.13.3 cancelWait consumes an allocation semaphore.
+	// Call it once: a second call on an unallocated context can block.
 	cancel()
 	assert.ErrorIs(t, ctx.Err(), context.Canceled)
 }
