@@ -175,35 +175,7 @@ jobs:
               failed=1
             fi
             if [[ "$module" == "components/tool/browseruse" ]]; then
-              if ! (cd "$module" && go test -mod=readonly -gcflags='all=-l -N' -count=20 -run '^(TestNewBrowserUseTool|TestExecute)
-
-  check-submodule-changes:
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-      - name: Summarize changed modules
-        env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          if ! git cat-file -e "$BASE_SHA^{commit}" 2>/dev/null; then
-            echo "No comparison base available" >> "$GITHUB_STEP_SUMMARY"
-            exit 0
-          fi
-          git diff --name-only "$BASE_SHA" HEAD > changed-files.txt
-          echo '### Modules to review for release' >> "$GITHUB_STEP_SUMMARY"
-          while IFS= read -r mod; do
-            dir=$(dirname "$mod")
-            if grep -Fq "$dir/" changed-files.txt; then
-              echo "- $dir" >> "$GITHUB_STEP_SUMMARY"
-            fi
-          done < <(git ls-files | grep -E '(^|/)go\.mod$' | sort)
- .); then
+              if ! (cd "$module" && go test -mod=readonly -gcflags='all=-l -N' -count=20 -run '^(TestNewBrowserUseTool|TestExecute)$' .); then
                 echo "::error::Repeated browser context tests failed"
                 failed=1
               fi
