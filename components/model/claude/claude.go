@@ -1256,6 +1256,9 @@ func convSchemaMessage(message *schema.Message) (mp anthropic.MessageParam, err 
 			messageParams = append(messageParams, anthropic.ContentBlockParamUnion{
 				OfToolResult: &anthropic.ToolResultBlockParam{ToolUseID: message.ToolCallID},
 			})
+			if isBreakpointMessage(message) {
+				populateContentBlockBreakPoint(messageParams[len(messageParams)-1], getMessageBreakpointCacheControl(message))
+			}
 		} else {
 			// Preserve the existing compatibility behavior for empty text messages.
 			messageParams = append(messageParams, anthropic.NewTextBlock(""))
