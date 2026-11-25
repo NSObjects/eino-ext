@@ -45,13 +45,20 @@ func TestBrowserUseIntegrationReusesManagedTabContexts(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 	defer cancel()
 	created := 0
+	var root context.Context
+	var parents []context.Context
 	b, err := newBrowserUseTool(ctx, &Config{
 		Headless:           true,
 		ChromeInstancePath: chrome,
 		ExtraChromiumArgs:  []string{"disable-dev-shm-usage"},
 	}, func(parent context.Context, opts ...chromedp.ContextOption) (context.Context, context.CancelFunc) {
 		created++
-		return chromedp.NewContext(parent, opts...)
+		parents = append(parents, parent)
+		child, cancelChild := chromedp.NewContext(parent, opts...)
+		if created == 1 {
+			root = child
+		}
+		return child, cancelChild
 	})
 	require.NoError(t, err)
 	t.Cleanup(b.Cleanup)
@@ -91,4 +98,13 @@ func TestBrowserUseIntegrationReusesManagedTabContexts(t *testing.T) {
 		}
 	}
 	require.Equal(t, afterOpen, created, "switching managed tabs should not allocate additional contexts")
+	require.Equal(t, root, b.browserCtx)
+	require.Len(t, b.tabContexts, 2)
+
+	thirdURL := server.URL + "/third"
+	run(&Param{Action: ActionOpenTab, URL: &thirdURL})
+	require.Equal(t, 3, created)
+	require.Len(t, b.tabContexts, 3)
+	require.Equal(t, root, parents[1])
+	require.Equal(t, root, parents[2], "new tabs must share the stable browser parent")
 }
