@@ -130,6 +130,7 @@ type Tool struct {
 	searchTool      duckduckgo.Search
 	cm              model.BaseChatModel
 	tpl             prompt.ChatTemplate
+	newContext      func(context.Context, ...chromedp.ContextOption) (context.Context, context.CancelFunc)
 }
 
 func (b *Tool) Info(_ context.Context) (*schema.ToolInfo, error) {
@@ -151,6 +152,10 @@ func (b *Tool) InvokableRun(ctx context.Context, argumentsInJSON string, opts ..
 }
 
 func NewBrowserUseTool(ctx context.Context, config *Config) (*Tool, error) {
+	return newBrowserUseTool(ctx, config, chromedp.NewContext)
+}
+
+func newBrowserUseTool(ctx context.Context, config *Config, newContext func(context.Context, ...chromedp.ContextOption) (context.Context, context.CancelFunc)) (*Tool, error) {
 	if config == nil {
 		config = &Config{}
 	}
@@ -253,6 +258,7 @@ func NewBrowserUseTool(ctx context.Context, config *Config) (*Tool, error) {
 			),
 		},
 		tabs:       make([]TabInfo, 0),
+		newContext: newContext,
 		searchTool: config.DDGSearchTool,
 		cm:         config.ExtractChatModel,
 		tpl:        prompt.FromMessages(schema.FString, schema.UserMessage(extractContentPrompt)),
@@ -263,6 +269,14 @@ func NewBrowserUseTool(ctx context.Context, config *Config) (*Tool, error) {
 		return nil, fmt.Errorf("failed to initialize browser: %w", err)
 	}
 	return but, nil
+}
+
+// createContext keeps browser context creation local to each Tool instance.
+func (b *Tool) createContext(ctx context.Context, opts ...chromedp.ContextOption) (context.Context, context.CancelFunc) {
+	if b.newContext != nil {
+		return b.newContext(ctx, opts...)
+	}
+	return chromedp.NewContext(ctx, opts...)
 }
 
 func (b *Tool) initialize(ctx context.Context, config *Config) error {
@@ -311,7 +325,7 @@ func (b *Tool) initialize(ctx context.Context, config *Config) error {
 	if config.Logf != nil {
 		logf = config.Logf
 	}
-	b.ctx, _ = chromedp.NewContext(
+	b.ctx, _ = b.createContext(
 		b.allocatorCtx,
 		chromedp.WithLogf(logf),
 	)
@@ -517,7 +531,7 @@ func (b *Tool) Execute(params *Param) (*ToolResult, error) {
 		if len(searchResults.Results) == 0 {
 			return &ToolResult{Error: "search result is empty"}, nil
 		}
-		newCtx, _ := chromedp.NewContext(b.ctx)
+		newCtx, _ := b.createContext(b.ctx)
 		if err := chromedp.Run(newCtx,
 			chromedp.Navigate(searchResults.Results[0].URL),
 			chromedp.WaitReady("body", chromedp.ByQuery),
@@ -573,7 +587,7 @@ func (b *Tool) Execute(params *Param) (*ToolResult, error) {
 		}
 		url := *params.URL
 
-		newCtx, _ := chromedp.NewContext(b.ctx)
+		newCtx, _ := b.createContext(b.ctx)
 		if err := chromedp.Run(newCtx,
 			chromedp.Navigate(url),
 			chromedp.WaitReady("body", chromedp.ByQuery),
@@ -603,7 +617,7 @@ func (b *Tool) Execute(params *Param) (*ToolResult, error) {
 
 		targetID := b.tabs[tabID].TargetID
 
-		newCtx, _ := chromedp.NewContext(b.ctx, chromedp.WithTargetID(targetID))
+		newCtx, _ := b.createContext(b.ctx, chromedp.WithTargetID(targetID))
 		err := chromedp.Run(newCtx, target.ActivateTarget(targetID))
 		if err != nil {
 			return &ToolResult{Error: fmt.Sprintf("failed to switch tab: %v", err)}, nil
@@ -636,7 +650,7 @@ func (b *Tool) Execute(params *Param) (*ToolResult, error) {
 			if len(b.tabs) > 0 {
 				newTargetID := b.tabs[0].TargetID
 
-				newCtx, _ := chromedp.NewContext(b.ctx, chromedp.WithTargetID(newTargetID))
+				newCtx, _ := b.createContext(b.ctx, chromedp.WithTargetID(newTargetID))
 				b.ctx = newCtx
 				b.currentTabID = b.tabs[0].ID
 
