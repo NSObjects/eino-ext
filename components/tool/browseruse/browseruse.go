@@ -124,6 +124,7 @@ type Tool struct {
 	ctx             context.Context
 	browserCtx      context.Context
 	tabContexts     map[target.ID]context.Context
+	tabCancels      map[target.ID]context.CancelFunc
 	allocatorCtx    context.Context
 	allocatorCancel context.CancelFunc
 	elements        []ElementInfo
@@ -332,8 +333,26 @@ func (b *Tool) openTab(url string) error {
 		return err
 	}
 	b.rememberTabContext(ctx)
+	if id := browserTargetID(ctx); id != "" {
+		if b.tabCancels == nil {
+			b.tabCancels = make(map[target.ID]context.CancelFunc)
+		}
+		b.tabCancels[id] = cancel
+	}
 	b.ctx = ctx
 	return nil
+}
+
+// releaseClosedTab is called only after a successful page close, under b.mu.
+// The root context is deliberately not registered in tabCancels: closing its
+// page must not cancel the browser or the remaining sibling tabs.
+func (b *Tool) releaseClosedTab(id target.ID) {
+	delete(b.tabContexts, id)
+	cancel := b.tabCancels[id]
+	delete(b.tabCancels, id)
+	if cancel != nil {
+		cancel()
+	}
 }
 
 func (b *Tool) initialize(ctx context.Context, config *Config) error {
@@ -713,7 +732,7 @@ func (b *Tool) Execute(params *Param) (*ToolResult, error) {
 			return &ToolResult{Error: fmt.Sprintf("failed to close tab: %v", err)}, nil
 		}
 
-		delete(b.tabContexts, closedID)
+		b.releaseClosedTab(closedID)
 		if len(b.tabs) > 1 {
 			if err := b.updateTabsInfo(b.tabParent()); err != nil {
 				return &ToolResult{Error: fmt.Sprintf("failed to update tab information: %v", err)}, nil
@@ -832,6 +851,7 @@ func (b *Tool) cleanupLocked() {
 	b.ctx = nil
 	b.browserCtx = nil
 	b.tabContexts = nil
+	b.tabCancels = nil
 	b.allocatorCtx = nil
 	b.elements = nil
 	b.tabs = nil
