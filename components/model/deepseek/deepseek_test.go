@@ -261,6 +261,7 @@ type drainTrackingStream struct {
 	responses []*deepseek.StreamChatCompletionResponse
 	idx       int
 	drained   chan struct{}
+	closed    chan struct{}
 	notified  bool
 }
 
@@ -280,6 +281,7 @@ func (m *drainTrackingStream) Recv() (*deepseek.StreamChatCompletionResponse, er
 }
 
 func (m *drainTrackingStream) Close() error {
+	close(m.closed)
 	return nil
 }
 
@@ -310,7 +312,7 @@ func TestStreamStopsReadingAfterResolveError(t *testing.T) {
 		})
 	}
 
-	stream := &drainTrackingStream{responses: responses, drained: make(chan struct{})}
+	stream := &drainTrackingStream{responses: responses, drained: make(chan struct{}), closed: make(chan struct{})}
 	defer mockey.Mock((*deepseek.Client).CreateChatCompletionStream).To(
 		func(ctx context.Context, request *deepseek.StreamChatCompletionRequest) (deepseek.ChatCompletionStream, error) {
 			return stream, nil
@@ -337,10 +339,18 @@ func TestStreamStopsReadingAfterResolveError(t *testing.T) {
 	assert.Contains(t, err.Error(), "failed to resolve stream response from DeepSeek")
 
 	select {
+	case <-stream.closed:
+	case <-time.After(5 * time.Second):
+		t.Fatal("upstream stream was not closed after the resolve error")
+	}
+	select {
 	case <-stream.drained:
 		t.Fatal("streaming goroutine kept reading upstream after reporting a resolve error")
-	case <-time.After(100 * time.Millisecond):
+	default:
 	}
+	assert.Equal(t, 2, stream.idx, "must stop reading immediately after the failed chunk")
+	_, err = out.Recv()
+	assert.ErrorIs(t, err, io.EOF)
 }
 
 func TestPanicErr(t *testing.T) {
