@@ -347,3 +347,39 @@ func TestUpdateTabs(t *testing.T) {
 		},
 	}, tool.tabs)
 }
+
+
+func TestCreateContextDefault(t *testing.T) {
+	parent, cancelParent := context.WithCancel(context.Background())
+	defer cancelParent()
+	tool := &Tool{}
+	ctx, cancel := tool.createContext(parent)
+	defer cancel()
+	assert.NotNil(t, chromedp.FromContext(ctx))
+	cancel()
+	assert.ErrorIs(t, ctx.Err(), context.Canceled)
+}
+
+func TestBrowserContextFactoryIsInstanceLocal(t *testing.T) {
+	parent := context.Background()
+	firstCalls, secondCalls := 0, 0
+	first := &Tool{newContext: func(ctx context.Context, opts ...chromedp.ContextOption) (context.Context, context.CancelFunc) {
+		firstCalls++
+		assert.Equal(t, parent, ctx)
+		assert.Len(t, opts, 1)
+		return context.WithCancel(ctx)
+	}}
+	second := &Tool{newContext: func(ctx context.Context, opts ...chromedp.ContextOption) (context.Context, context.CancelFunc) {
+		secondCalls++
+		return context.WithCancel(ctx)
+	}}
+	firstCtx, firstCancel := first.createContext(parent, chromedp.WithTargetID("first"))
+	defer firstCancel()
+	secondCtx, secondCancel := second.createContext(parent)
+	defer secondCancel()
+	firstCancel()
+	assert.ErrorIs(t, firstCtx.Err(), context.Canceled)
+	assert.NoError(t, secondCtx.Err())
+	assert.Equal(t, 1, firstCalls)
+	assert.Equal(t, 1, secondCalls)
+}
