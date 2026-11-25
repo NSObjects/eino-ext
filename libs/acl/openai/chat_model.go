@@ -30,6 +30,7 @@ import (
 	"github.com/bytedance/sonic"
 	"github.com/eino-contrib/jsonschema"
 	"github.com/meguminnnnnnnnn/go-openai"
+	orderedmap "github.com/wk8/go-ordered-map/v2"
 
 	"github.com/cloudwego/eino/callbacks"
 	"github.com/cloudwego/eino/components/model"
@@ -1281,34 +1282,44 @@ func (b *streamMessageBuilder) build(resp openai.ChatCompletionStreamResponse) (
 	return msg, found, nil
 }
 
-func toTools(tis []*schema.ToolInfo) ([]tool, error) {
-	var sortArrayFields func(*jsonschema.Schema)
-	sortArrayFields = func(sc *jsonschema.Schema) {
+// sortedToolSchema copies only the nodes visited by the existing Required
+// sorter. Other schema fields remain shared and read-only. A memo also handles
+// repeated node references without recursively copying the same node.
+func sortedToolSchema(root *jsonschema.Schema) *jsonschema.Schema {
+	seen := make(map[*jsonschema.Schema]*jsonschema.Schema)
+	var visit func(*jsonschema.Schema) *jsonschema.Schema
+	visit = func(sc *jsonschema.Schema) *jsonschema.Schema {
 		if sc == nil {
-			return
+			return nil
 		}
+		if cp, ok := seen[sc]; ok {
+			return cp
+		}
+		cp := *sc
+		seen[sc] = &cp
 
 		switch sc.Type {
 		case string(schema.Object):
 			if len(sc.Required) == 0 {
-				return
+				break
 			}
-
-			sort.Strings(sc.Required)
-			for pair := sc.Properties.Oldest(); pair != nil; pair = pair.Next() {
-				sortArrayFields(pair.Value)
+			cp.Required = append([]string(nil), sc.Required...)
+			sort.Strings(cp.Required)
+			if sc.Properties != nil {
+				cp.Properties = orderedmap.New[string, *jsonschema.Schema]()
+				for pair := sc.Properties.Oldest(); pair != nil; pair = pair.Next() {
+					cp.Properties.Set(pair.Key, visit(pair.Value))
+				}
 			}
-
 		case string(schema.Array):
-			if sc.Items != nil {
-				sortArrayFields(sc.Items)
-			}
-
-		default:
-			return
+			cp.Items = visit(sc.Items)
 		}
+		return &cp
 	}
+	return visit(root)
+}
 
+func toTools(tis []*schema.ToolInfo) ([]tool, error) {
 	tools := make([]tool, len(tis))
 	for i := range tis {
 		ti := tis[i]
@@ -1321,13 +1332,15 @@ func toTools(tis []*schema.ToolInfo) ([]tool, error) {
 			return nil, fmt.Errorf("failed to convert tool parameters to JSONSchema: %w", err)
 		}
 
-		sortArrayFields(paramsJSONSchema)
+		// ToJSONSchema returns the shared internal schema: sort a copy so
+		// concurrent requests reusing one ToolInfo never race on it.
+		sortedParams := sortedToolSchema(paramsJSONSchema)
 
 		tools[i] = tool{
 			Function: &functionDefinition{
 				Name:        ti.Name,
 				Description: ti.Desc,
-				Parameters:  paramsJSONSchema,
+				Parameters:  sortedParams,
 			},
 		}
 	}
