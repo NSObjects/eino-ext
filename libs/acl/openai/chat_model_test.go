@@ -161,7 +161,7 @@ func TestStream(t *testing.T) {
 
 		expectedErr := errors.New("eof modifier error")
 		in := []*schema.Message{{Role: schema.User, Content: "hello"}}
-		outStream, err := c.Stream(t.Context(), in,
+		outStream, err := c.Stream(context.Background(), in,
 			WithResponseChunkMessageModifier(func(ctx context.Context, msg *schema.Message, rawBody []byte, end bool) (*schema.Message, error) {
 				if end {
 					return nil, expectedErr
@@ -169,16 +169,25 @@ func TestStream(t *testing.T) {
 				return msg, nil
 			}),
 		)
-		assert.NoError(t, err)
+		if !assert.NoError(t, err) || !assert.NotNil(t, outStream) {
+			return
+		}
 		defer outStream.Close()
 
 		msg, recvErr := outStream.Recv()
-		assert.NoError(t, recvErr)
+		if !assert.NoError(t, recvErr) || !assert.NotNil(t, msg) {
+			return
+		}
 		assert.Equal(t, "hello", msg.Content)
 
 		_, recvErr = outStream.Recv()
 		assert.ErrorIs(t, recvErr, expectedErr)
 		assert.ErrorContains(t, recvErr, "failed to modify chunk message")
+
+		// Wait for the producer to close the stream before removing its mocks.
+		_, recvErr = outStream.Recv()
+		assert.ErrorIs(t, recvErr, io.EOF)
+		assert.Equal(t, 2, call)
 	})
 }
 
