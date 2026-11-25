@@ -1250,9 +1250,19 @@ func convSchemaMessage(message *schema.Message) (mp anthropic.MessageParam, err 
 		populateContentBlockBreakPoint(messageParams[len(messageParams)-1], getMessageBreakpointCacheControl(message))
 	}
 	if len(messageParams) == 0 {
-		// Compatibility handling for empty messages: an empty message is treated as
-		// one whose Content field is set but contains an empty string.
-		messageParams = append(messageParams, anthropic.NewTextBlock(""))
+		if message.Role == schema.Tool {
+			// Preserve the tool-use association even when a tool returns no text.
+			// The SDK allows a tool_result with omitted content.
+			messageParams = append(messageParams, anthropic.ContentBlockParamUnion{
+				OfToolResult: &anthropic.ToolResultBlockParam{ToolUseID: message.ToolCallID},
+			})
+			if isBreakpointMessage(message) {
+				populateContentBlockBreakPoint(messageParams[len(messageParams)-1], getMessageBreakpointCacheControl(message))
+			}
+		} else {
+			// Preserve the existing compatibility behavior for empty text messages.
+			messageParams = append(messageParams, anthropic.NewTextBlock(""))
+		}
 	}
 
 	switch message.Role {
