@@ -1,3 +1,7 @@
+[default]
+# Intentional partial SSE token in the Ark streaming regression fixture.
+extend-ignore-re = ['"delta":"hel"']
+
 [default.extend-words]
 ot = "ot"
 OT = "OT"
