@@ -31,19 +31,22 @@ import (
 	"github.com/cloudwego/eino-ext/components/tool/duckduckgo/v2"
 )
 
+func fakeBrowserContext(ctx context.Context, _ ...chromedp.ContextOption) (context.Context, context.CancelFunc) {
+	return ctx, func() {}
+}
+
 func TestNewBrowserUseTool(t *testing.T) {
 	ctx := context.Background()
 
 	defer mockey.Mock(chromedp.NewExecAllocator).Return(ctx, func() {}).Build().UnPatch()
-	defer mockey.Mock(chromedp.NewContext).Return(ctx, func() {}).Build().UnPatch()
 	defer mockey.Mock(chromedp.Run).Return(nil).Build().UnPatch()
 	defer mockey.Mock((*Tool).updateElements).Return(nil).Build().UnPatch()
 	defer mockey.Mock((*Tool).updateTabsInfo).Return(nil).Build().UnPatch()
 
-	tool, err := NewBrowserUseTool(ctx, &Config{
+	tool, err := newBrowserUseTool(ctx, &Config{
 		ChromeInstancePath: "test path",
 		ProxyServer:        "proxy server",
-	})
+	}, fakeBrowserContext)
 	assert.NoError(t, err)
 	assert.NotNil(t, tool)
 
@@ -55,7 +58,7 @@ func TestNewBrowserUseTool(t *testing.T) {
 }
 
 func TestExecute(t *testing.T) {
-	tool := &Tool{}
+	tool := &Tool{ctx: context.Background(), newContext: fakeBrowserContext}
 	defer mockey.Mock((*Tool).updateElements).Return(nil).Build().UnPatch()
 	defer mockey.Mock((*Tool).updateTabsInfo).Return(nil).Build().UnPatch()
 
@@ -113,7 +116,6 @@ func TestExecute(t *testing.T) {
 			},
 		}, nil).Build().UnPatch()
 		defer mockey.Mock(chromedp.Run).Return(nil).Build().UnPatch()
-		defer mockey.Mock(chromedp.NewContext).Return(context.Background(), func() {}).Build().UnPatch()
 
 		query := "test query"
 		result, err := tool.Execute(&Param{Action: ActionWebSearch, Query: &query})
