@@ -139,7 +139,9 @@ func (b *Tool) Info(_ context.Context) (*schema.ToolInfo, error) {
 
 func (b *Tool) InvokableRun(ctx context.Context, argumentsInJSON string, opts ...tool.Option) (string, error) {
 	param := &Param{}
-	err := sonic.UnmarshalString(argumentsInJSON, param)
+	if err := sonic.UnmarshalString(argumentsInJSON, param); err != nil {
+		return "", fmt.Errorf("invalid browser tool arguments: %w", err)
+	}
 	result, err := b.Execute(param)
 	if err != nil {
 		return "", err
@@ -394,6 +396,9 @@ const (
 )
 
 func (b *Tool) Execute(params *Param) (*ToolResult, error) {
+	if params == nil {
+		return &ToolResult{Error: "params are required"}, nil
+	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
@@ -425,7 +430,7 @@ func (b *Tool) Execute(params *Param) (*ToolResult, error) {
 			return &ToolResult{Error: "index is required for 'click_element' action"}, nil
 		}
 		index := *params.Index
-		if index >= len(b.elements) {
+		if index < 0 || index >= len(b.elements) {
 			return &ToolResult{Error: fmt.Sprintf("index %d out of range", index)}, nil
 		}
 
