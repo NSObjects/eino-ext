@@ -53,13 +53,13 @@ func TestLoad(t *testing.T) {
 
 	t.Run("html loader", func(t *testing.T) {
 		loader, err := NewLoader(ctx, &LoaderConfig{})
-		assert.Nil(t, err)
+		require.NoError(t, err)
 
 		url := server.URL + "/test.html"
 		docs, err := loader.Load(ctx, document.Source{URI: url})
-		assert.Nil(t, err)
+		require.NoError(t, err)
 
-		assert.Equal(t, 1, len(docs))
+		require.Len(t, docs, 1)
 		assert.Equal(t, url, docs[0].MetaData[html.MetaKeySource])
 		assert.Equal(t, "Test html in url loader", docs[0].MetaData[html.MetaKeyTitle])
 	})
@@ -68,7 +68,7 @@ func TestLoad(t *testing.T) {
 		p := &MockParser{
 			mock: func(reader io.Reader) ([]*schema.Document, error) {
 				data, err := io.ReadAll(reader)
-				assert.Nil(t, err)
+				require.NoError(t, err)
 
 				return []*schema.Document{
 					{
@@ -81,15 +81,15 @@ func TestLoad(t *testing.T) {
 		loader, err := NewLoader(ctx, &LoaderConfig{
 			Parser: p,
 		})
-		assert.Nil(t, err)
+		require.NoError(t, err)
 
 		url := server.URL + "/test.md"
 		docs, err := loader.Load(ctx, document.Source{
 			URI: url,
 		})
-		assert.Nil(t, err)
+		require.NoError(t, err)
 
-		assert.Equal(t, 1, len(docs))
+		require.Len(t, docs, 1)
 		assert.Equal(t, "# Title\nhello world", strings.ReplaceAll(docs[0].Content, "\r\n", "\n"))
 	})
 
@@ -104,15 +104,15 @@ func TestLoad(t *testing.T) {
 				Transport: http.NewFileTransport(http.Dir("./testdata")),
 			},
 		})
-		assert.Nil(t, err)
+		require.NoError(t, err)
 
 		url := server.URL + "/test.xx"
 		docs, err := loader.Load(ctx, document.Source{
 			URI: url,
 		})
-		assert.Nil(t, err)
+		require.NoError(t, err)
 
-		assert.Equal(t, 1, len(docs))
+		require.Len(t, docs, 1)
 		assert.Equal(t, "Test html in url loader", docs[0].MetaData[html.MetaKeyTitle])
 	})
 }
