@@ -38,7 +38,7 @@ func main() {
 	// ...
 
 	embedder, err := cache.NewEmbedder(originalEmbedder,
-		cache.WithCacher(cacheredis.NewCacher(rdb)),            // 使用 Redis 作为缓存
+		cache.WithCacher(cacheredis.NewCacher(rdb, cacheredis.WithPrefix("app:embedding:v2:provider-model"))),            // 使用 Redis 作为缓存
 		cache.WithGenerator(cache.NewHashGenerator(md5.New())), // 使用 md5 生成唯一键
 	)
 	if err != nil {
@@ -64,7 +64,7 @@ func main() {
 
 ## 缓存键格式与迁移
 
-内置生成器使用带版本的缓存键。SimpleGenerator 在文本前编码其字节长度，随后拼接文本和模型；HashGenerator 对该编码计算哈希，并给摘要添加版本前缀。这样可以避免文本与模型之间的边界歧义。两种格式均会改变已有缓存键。
+内置生成器使用带版本的缓存键。SimpleGenerator 在文本前编码其字节长度，随后拼接文本和模型；HashGenerator 对该编码计算哈希，并给摘要添加版本前缀。这样可以避免文本与模型之间的边界歧义。两种格式均会改变已有缓存键。仅在生成键中加入版本标记，不能保证与任意旧字符串键完全隔离；应使用与旧配置写入键不重叠的后端命名空间。若旧 Redis 前缀或输入不受限制，优先使用独立数据库或实例。
 
 升级时请使用**新的缓存命名空间**（Redis 可通过 `cacheredis.WithPrefix` 设置新前缀）。不要回退查询旧键：旧编码存在歧义，可能已经关联了错误向量。旧数据可等待过期，或按运维策略仅清理专用旧命名空间；库不会自动删除旧键。
 

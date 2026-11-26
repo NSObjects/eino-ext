@@ -18,6 +18,7 @@ package cache
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"testing"
@@ -267,4 +268,61 @@ func TestEmbedderPreservesMixedCacheResultOrder(t *testing.T) {
 	mc.AssertNumberOfCalls(t, "Set", 2)
 	mc.AssertExpectations(t)
 	me.AssertExpectations(t)
+}
+
+type boundaryMemoryCacher struct {
+	values map[string][]float64
+}
+
+func (c *boundaryMemoryCacher) Get(_ context.Context, key string) ([]float64, bool, error) {
+	value, ok := c.values[key]
+	return value, ok, nil
+}
+
+func (c *boundaryMemoryCacher) Set(_ context.Context, key string, value []float64, _ time.Duration) error {
+	c.values[key] = value
+	return nil
+}
+
+func TestEmbedderSeparatesTextModelBoundary(t *testing.T) {
+	ctx := context.Background()
+	for _, tc := range []struct {
+		name string
+		gen  Generator
+	}{
+		{name: "simple", gen: NewSimpleGenerator()},
+		{name: "sha256", gen: NewHashGenerator(sha256.New())},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := &boundaryMemoryCacher{values: make(map[string][]float64)}
+			provider := new(mockEmbedder)
+			e, err := NewEmbedder(provider, WithCacher(c), WithGenerator(tc.gen))
+			require.NoError(t, err)
+			modelIs := func(want string) interface{} {
+				return mock.MatchedBy(func(opts []embedding.Option) bool {
+					model := embedding.GetCommonOptions(nil, opts...).Model
+					return model != nil && *model == want
+				})
+			}
+			provider.On("EmbedStrings", ctx, []string{"a-b"}, modelIs("c")).
+				Return([][]float64{{1}}, nil).Once()
+			provider.On("EmbedStrings", ctx, []string{"a"}, modelIs("b-c")).
+				Return([][]float64{{2}}, nil).Once()
+
+			// Legacy text+"-"+model maps both requests to "a-b-c".
+			// A real in-memory key store, not expected keys computed by
+			// the generator, catches the resulting wrong cache hit.
+			for i := 0; i < 2; i++ {
+				first, err := e.EmbedStrings(ctx, []string{"a-b"}, embedding.WithModel("c"))
+				require.NoError(t, err)
+				require.Equal(t, [][]float64{{1}}, first)
+				second, err := e.EmbedStrings(ctx, []string{"a"}, embedding.WithModel("b-c"))
+				require.NoError(t, err)
+				require.Equal(t, [][]float64{{2}}, second)
+			}
+			require.Len(t, c.values, 2)
+			provider.AssertNumberOfCalls(t, "EmbedStrings", 2)
+			provider.AssertExpectations(t)
+		})
+	}
 }

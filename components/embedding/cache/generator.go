@@ -56,8 +56,7 @@ func (g *SimpleGenerator) Generate(_ context.Context, text string, opt Generator
 //
 // The generated key is a version prefix followed by the hex encoded digest of the wrapped
 // generator's output. Its length depends only on the prefix and hash function, never
-// on the input length. The
-// key no longer directly contains the plaintext, but hashing alone does not
+// on the input length. The key no longer directly contains plaintext, but hashing alone does not
 // guarantee confidentiality of predictable inputs.
 //
 // Note: Because of the use of the [hash.Hash] algorithm, there is a probability that data

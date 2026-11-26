@@ -144,7 +144,7 @@ func TestGenerator_HashGeneratorProducesDigest(t *testing.T) {
 			assert.Equal(t, "v2:h:"+tc.digest(plainText), key, "key must be the digest of the wrapped generator output")
 			assert.Len(t, key, tc.wantLen, "hash keys must have the digest's fixed length")
 
-			// The cached text must not be recoverable from the key: a key that embeds the
+			// The key must not directly contain the cached text: a key that embeds the
 			// plaintext leaks prompt and document content into the cache key space.
 			assert.NotContains(t, key, hex.EncodeToString([]byte(tc.text)))
 			assert.NotContains(t, key, tc.text)
