@@ -151,6 +151,13 @@ func (l *Loader) load(ctx context.Context, src document.Source, opts ...document
 		return nil, err
 	}
 
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		// Do not parse error responses or expose their potentially sensitive
+		// contents in errors. The loader owns the body after a successful Do.
+		_ = resp.Body.Close()
+		return nil, fmt.Errorf("unexpected HTTP status code %d", resp.StatusCode)
+	}
+
 	return resp.Body, nil
 }
 

@@ -17,6 +17,7 @@
 package url
 
 import (
+	"compress/gzip"
 	"context"
 	"errors"
 	"fmt"
@@ -153,5 +154,88 @@ func TestLoadChecksEntireResponseDespiteParserBehavior(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+func TestLoadLimitsDecompressedResponse(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Encoding", "gzip")
+		zw := gzip.NewWriter(w)
+		_, _ = io.WriteString(zw, strings.Repeat("a", 4096))
+		_ = zw.Close()
+	}))
+	defer server.Close()
+
+	// The compressed payload fits within 128 bytes, but its decoded body
+	// does not. Verify the real HTTP transport's automatic decompression.
+	transport := &http.Transport{}
+	defer transport.CloseIdleConnections()
+	l, err := NewLoader(context.Background(), &LoaderConfig{
+		Client:           &http.Client{Transport: transport},
+		MaxResponseBytes: 128,
+		Parser: &MockParser{mock: func(r io.Reader) ([]*schema.Document, error) {
+			_, _ = io.ReadAll(r)
+			return []*schema.Document{{Content: "ignored read error"}}, nil
+		}},
+	})
+	require.NoError(t, err)
+	docs, err := l.Load(context.Background(), document.Source{URI: server.URL})
+	require.ErrorIs(t, err, ErrResponseTooLarge)
+	require.Nil(t, docs)
+}
+
+func TestLoadRejectsTruncatedHTTPBodyDespiteSuccessfulParser(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Length", "100")
+		_, _ = io.WriteString(w, "short")
+	}))
+	defer server.Close()
+	for _, mode := range []string{"ignore_error", "no_read"} {
+		t.Run(mode, func(t *testing.T) {
+			l, err := NewLoader(context.Background(), &LoaderConfig{
+				MaxResponseBytes: 1024,
+				Parser: &MockParser{mock: func(r io.Reader) ([]*schema.Document, error) {
+					if mode == "ignore_error" {
+						_, _ = io.ReadAll(r)
+					}
+					return []*schema.Document{{Content: "partial"}}, nil
+				}},
+			})
+			require.NoError(t, err)
+			docs, err := l.Load(context.Background(), document.Source{URI: server.URL})
+			require.ErrorIs(t, err, io.ErrUnexpectedEOF)
+			require.Nil(t, docs)
+		})
+	}
+}
+
+func TestLoadClosesBodyOnLimitAndReadFailure(t *testing.T) {
+	readErr := errors.New("read failure")
+	for _, tc := range []struct {
+		name   string
+		reader io.Reader
+		want   error
+	}{
+		{"overflow", strings.NewReader("abcd"), ErrResponseTooLarge},
+		{"read error", limitReaderFunc(func(p []byte) (int, error) { return copy(p, "ab"), readErr }), readErr},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			body := &statusTrackingBody{reader: tc.reader}
+			l, err := NewLoader(context.Background(), &LoaderConfig{
+				MaxResponseBytes: 3,
+				Client: &http.Client{Transport: statusTransportFunc(func(req *http.Request) (*http.Response, error) {
+					return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: body, Request: req}, nil
+				})},
+				Parser: &MockParser{mock: func(r io.Reader) ([]*schema.Document, error) {
+					_, _ = io.ReadAll(r)
+					return []*schema.Document{{Content: "partial"}}, nil
+				}},
+			})
+			require.NoError(t, err)
+			docs, err := l.Load(context.Background(), document.Source{URI: "https://example.invalid/document"})
+			require.ErrorIs(t, err, tc.want)
+			require.Nil(t, docs)
+			require.Equal(t, 1, body.closes)
+		})
 	}
 }

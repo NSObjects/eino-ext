@@ -76,6 +76,10 @@ type LoaderConfig struct {
 }
 ```
 
+### HTTP 响应状态
+
+仅最终状态为 2xx 的 HTTP 响应会交给 Parser。其他状态返回错误并关闭响应体，不进行解析；错误信息不会包含响应体内容。重定向行为仍由 HTTP Client 控制。此前依赖非 2xx 响应体的调用方需要适配此行为变化。
+
 ### 响应体大小限制
 
 加载器检查完整响应体，包括 Parser 未读取的剩余内容。MaxResponseBytes 非正值使用默认 10 MiB；较大文档可配置更大的正值。超出限制返回 ErrResponseTooLarge（可通过 errors.Is 判断），不返回部分文档。限制基于 HTTP Client 暴露的响应体字节数，Transport 自动解压时按解压后字节数计算，不限制 Parser 自身的内存分配。新增配置字段后，使用非具名 LoaderConfig 字面量的调用方需要调整。
