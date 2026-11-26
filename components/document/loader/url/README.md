@@ -79,6 +79,10 @@ type LoaderConfig struct {
 
 Only final HTTP responses with a 2xx status are passed to the parser. Other statuses return an error and the response body is closed without parsing. Error response contents are not included in the returned error. Redirect handling remains controlled by the HTTP client. Applications that previously loaded non-2xx bodies must handle this behavior change.
 
+### Response body ownership
+
+The loader closes the response body before reporting successful completion. If closing fails after a successful parse, Load returns the close error instead of documents. If an earlier load or parse error occurs, that error remains primary. The loader does not retry Close.
+
 ## Advanced Usage
 
 ### Custom HTTP Client with Proxy

@@ -114,13 +114,26 @@ func (l *Loader) Load(ctx context.Context, src document.Source, opts ...document
 	if err != nil {
 		return nil, fmt.Errorf("failed to load content from uri [%s]: %w", src.URI, err)
 	}
-	defer readerCloser.Close()
+	closed := false
+	defer func() {
+		if !closed {
+			// Preserve the original load or parse error on failure paths.
+			_ = readerCloser.Close()
+		}
+	}()
 
 	o := document.GetLoaderCommonOptions(&document.LoaderOptions{}, opts...)
 
 	docs, err = l.conf.Parser.Parse(ctx, readerCloser, append([]parser.Option{parser.WithURI(src.URI)}, o.ParserOptions...)...)
 	if err != nil {
 		return nil, fmt.Errorf("parse content of uri [%s] err: %w", src.URI, err)
+	}
+
+	// A successful Load must release its response before reporting success.
+	// Mark it closed before calling Close so even a failure is never retried.
+	closed = true
+	if closeErr := readerCloser.Close(); closeErr != nil {
+		return nil, fmt.Errorf("failed to close response body of uri [%s]: %w", src.URI, closeErr)
 	}
 
 	_ = callbacks.OnEnd(ctx, &document.LoaderCallbackOutput{
