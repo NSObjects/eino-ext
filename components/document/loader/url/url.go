@@ -93,17 +93,17 @@ func (l *Loader) Load(ctx context.Context, src document.Source, opts ...document
 		}
 	}()
 
+	if l.conf == nil || l.conf.Parser == nil {
+		return nil, errors.New("parser is nil")
+	}
+
 	var readerCloser io.ReadCloser
-	readerCloser, err = l.load(ctx, src)
+	readerCloser, err = l.load(ctx, src, opts...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load content from uri [%s]: %w", src.URI, err)
 	}
 	defer readerCloser.Close()
 
-	if l.conf.Parser == nil {
-		return nil, errors.New("parser is nil")
-	}
-	
 	o := document.GetLoaderCommonOptions(&document.LoaderOptions{}, opts...)
 
 	docs, err = l.conf.Parser.Parse(ctx, readerCloser, append([]parser.Option{parser.WithURI(src.URI)}, o.ParserOptions...)...)
@@ -119,10 +119,14 @@ func (l *Loader) Load(ctx context.Context, src document.Source, opts ...document
 	return docs, nil
 }
 
-func (l *Loader) load(ctx context.Context, src document.Source) (io.ReadCloser, error) {
-	req, err := l.conf.RequestBuilder(ctx, src)
+func (l *Loader) load(ctx context.Context, src document.Source, opts ...document.LoaderOption) (io.ReadCloser, error) {
+	req, err := l.conf.RequestBuilder(ctx, src, opts...)
 	if err != nil {
 		return nil, err
+	}
+
+	if req == nil {
+		return nil, errors.New("request builder returned a nil request")
 	}
 
 	resp, err := l.conf.Client.Do(req)
