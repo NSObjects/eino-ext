@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"time"
 
 	"github.com/cloudwego/eino-ext/components/document/parser/html"
 	"github.com/cloudwego/eino/callbacks"
@@ -33,12 +34,16 @@ import (
 
 var _ document.Loader = (*Loader)(nil)
 
+const defaultHTTPTimeout = 30 * time.Second
+
 // LoaderConfig is the config for url Loader.
 type LoaderConfig struct {
 	// optional, default: parser/html.
 	Parser parser.Parser
 
-	// optional.
+	// Optional. If nil, a copy of http.DefaultClient is used with a 30-second
+	// timeout when the default client has no positive timeout. A supplied
+	// client is used as-is, including its timeout and redirect policy.
 	Client *http.Client
 
 	// optional, default GET uri.
@@ -71,7 +76,14 @@ func NewLoader(ctx context.Context, conf *LoaderConfig) (*Loader, error) {
 		conf.Parser = p
 	}
 	if conf.Client == nil {
-		conf.Client = http.DefaultClient
+		// Copy client settings, not the transport: retain proxy, connection
+		// pooling, cookie jar and redirect policy without changing the global
+		// default client or a caller-provided client.
+		client := *http.DefaultClient
+		if client.Timeout <= 0 {
+			client.Timeout = defaultHTTPTimeout
+		}
+		conf.Client = &client
 	}
 	if conf.RequestBuilder == nil {
 		conf.RequestBuilder = defaultRequestBuilder

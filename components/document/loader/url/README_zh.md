@@ -64,7 +64,8 @@ type LoaderConfig struct {
     Parser parser.Parser
     
     // Client 指定要使用的 HTTP 客户端
-    // 可选。默认值：http.DefaultClient
+    // 可选。默认复制 http.DefaultClient，若没有正值超时则设置 30 秒。
+    // 显式传入的 Client 保持原配置，包括 Timeout: 0。
     Client *http.Client
     
     // RequestBuilder 自定义 HTTP 请求
