@@ -64,7 +64,9 @@ type LoaderConfig struct {
     Parser parser.Parser
     
     // Client specifies the HTTP client to use
-    // Optional. Default: http.DefaultClient
+    // Optional. Default: copy of http.DefaultClient, with a 30s timeout
+    // if the default client has no positive timeout.
+    // A supplied client is used as-is, including Timeout: 0.
     Client *http.Client
     
     // RequestBuilder customizes the HTTP request
