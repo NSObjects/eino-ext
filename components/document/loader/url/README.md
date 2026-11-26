@@ -73,6 +73,10 @@ type LoaderConfig struct {
 }
 ```
 
+### HTTP response status
+
+Only final HTTP responses with a 2xx status are passed to the parser. Other statuses return an error and the response body is closed without parsing. Error response contents are not included in the returned error. Redirect handling remains controlled by the HTTP client. Applications that previously loaded non-2xx bodies must handle this behavior change.
+
 ## Advanced Usage
 
 ### Custom HTTP Client with Proxy
