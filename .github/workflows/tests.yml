@@ -180,6 +180,12 @@ jobs:
                 failed=1
               fi
             fi
+            if [[ "$module" == "components/indexer/es9" ]]; then
+              if ! (cd "$module" && go test -mod=readonly -gcflags='all=-l -N' -count=20 -timeout=2m .); then
+                echo "::error::Repeated ES9 indexer tests failed"
+                failed=1
+              fi
+            fi
             echo "::endgroup::"
           done
           exit "$failed"
