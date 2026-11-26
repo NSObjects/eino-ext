@@ -27,6 +27,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/cloudwego/eino/components/document"
 	"github.com/cloudwego/eino/schema"
@@ -238,4 +239,40 @@ func TestLoadClosesBodyOnLimitAndReadFailure(t *testing.T) {
 			require.Equal(t, 1, body.closes)
 		})
 	}
+}
+
+func TestLoadRemainderHonorsClientTimeout(t *testing.T) {
+	// Flush a valid response, then hold its body open until the client cancels.
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, "partial")
+		w.(http.Flusher).Flush()
+		<-r.Context().Done()
+	}))
+	defer server.Close()
+
+	// A short positive global timeout must survive the default-client copy.
+	original := http.DefaultClient
+	transport := &http.Transport{}
+	defer transport.CloseIdleConnections()
+	http.DefaultClient = &http.Client{Transport: transport, Timeout: 2 * time.Second}
+	defer func() { http.DefaultClient = original }()
+
+	parsed := false
+	l, err := NewLoader(context.Background(), &LoaderConfig{
+		MaxResponseBytes: 1024,
+		Parser: &MockParser{mock: func(io.Reader) ([]*schema.Document, error) {
+			parsed = true
+			return []*schema.Document{{Content: "partial"}}, nil
+		}},
+	})
+	require.NoError(t, err)
+	require.Equal(t, 2*time.Second, l.conf.Client.Timeout)
+	// Keep a separate outer deadline so even a timeout regression cannot hang CI.
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	docs, err := l.Load(ctx, document.Source{URI: server.URL})
+	require.True(t, parsed, "parser must succeed before remainder validation")
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	require.Nil(t, docs)
+	require.NoError(t, ctx.Err(), "the HTTP client timeout, not the outer deadline, must end the read")
 }
