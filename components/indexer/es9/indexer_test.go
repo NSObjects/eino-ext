@@ -25,7 +25,6 @@ import (
 	"net/http"
 	"testing"
 
-	. "github.com/bytedance/mockey"
 	"github.com/cloudwego/eino/components/embedding"
 	"github.com/cloudwego/eino/components/indexer"
 	"github.com/cloudwego/eino/schema"
@@ -35,20 +34,20 @@ import (
 )
 
 func TestBulkAdd(t *testing.T) {
-	PatchConvey("test bulkAdd", t, func() {
+	convey.Convey("test bulkAdd", t, func() {
 		ctx := context.Background()
 		extField := "extra_field"
 
 		d1 := &schema.Document{ID: "123", Content: "asd", MetaData: map[string]any{extField: "ext_1"}}
 		d2 := &schema.Document{ID: "456", Content: "qwe", MetaData: map[string]any{extField: "ext_2"}}
 		docs := []*schema.Document{d1, d2}
-		bi, err := esutil.NewBulkIndexer(esutil.BulkIndexerConfig{})
-		convey.So(err, convey.ShouldBeNil)
 
-		PatchConvey("test NewBulkIndexer error", func() {
+		convey.Convey("test NewBulkIndexer error", func() {
 			mockErr := fmt.Errorf("test err")
-			Mock(esutil.NewBulkIndexer).Return(nil, mockErr).Build()
 			i := &Indexer{
+				newBulkIndexer: func(esutil.BulkIndexerConfig) (esutil.BulkIndexer, error) {
+					return nil, mockErr
+				},
 				config: &IndexerConfig{
 					Index: "mock_index",
 					DocumentToFields: func(ctx context.Context, doc *schema.Document) (field2Value map[string]FieldValue, err error) {
@@ -62,10 +61,12 @@ func TestBulkAdd(t *testing.T) {
 			convey.So(err, convey.ShouldBeError, mockErr)
 		})
 
-		PatchConvey("test FieldMapping error", func() {
+		convey.Convey("test FieldMapping error", func() {
 			mockErr := fmt.Errorf("test err")
-			Mock(esutil.NewBulkIndexer).Return(bi, nil).Build()
 			i := &Indexer{
+				newBulkIndexer: func(esutil.BulkIndexerConfig) (esutil.BulkIndexer, error) {
+					return &MockBulkIndexer{}, nil
+				},
 				config: &IndexerConfig{
 					Index: "mock_index",
 					DocumentToFields: func(ctx context.Context, doc *schema.Document) (field2Value map[string]FieldValue, err error) {
@@ -79,9 +80,11 @@ func TestBulkAdd(t *testing.T) {
 			convey.So(err, convey.ShouldBeError, fmt.Errorf("[bulkAdd] FieldMapping failed, %w", mockErr))
 		})
 
-		PatchConvey("test len(needEmbeddingFields) > i.config.BatchSize", func() {
-			Mock(esutil.NewBulkIndexer).Return(bi, nil).Build()
+		convey.Convey("test len(needEmbeddingFields) > i.config.BatchSize", func() {
 			i := &Indexer{
+				newBulkIndexer: func(esutil.BulkIndexerConfig) (esutil.BulkIndexer, error) {
+					return &MockBulkIndexer{}, nil
+				},
 				config: &IndexerConfig{
 					Index:     "mock_index",
 					BatchSize: 1,
@@ -99,9 +102,11 @@ func TestBulkAdd(t *testing.T) {
 			convey.So(err, convey.ShouldBeError, fmt.Errorf("[bulkAdd] needEmbeddingFields length over batch size, batch size=%d, got size=%d", i.config.BatchSize, 2))
 		})
 
-		PatchConvey("test embedding not provided", func() {
-			Mock(esutil.NewBulkIndexer).Return(bi, nil).Build()
+		convey.Convey("test embedding not provided", func() {
 			i := &Indexer{
+				newBulkIndexer: func(esutil.BulkIndexerConfig) (esutil.BulkIndexer, error) {
+					return &MockBulkIndexer{}, nil
+				},
 				config: &IndexerConfig{
 					Index:     "mock_index",
 					BatchSize: 2,
@@ -123,10 +128,12 @@ func TestBulkAdd(t *testing.T) {
 			convey.So(err, convey.ShouldBeError, fmt.Errorf("[bulkAdd] embedding method not provided"))
 		})
 
-		PatchConvey("test embed failed", func() {
+		convey.Convey("test embed failed", func() {
 			mockErr := fmt.Errorf("test err")
-			Mock(esutil.NewBulkIndexer).Return(bi, nil).Build()
 			i := &Indexer{
+				newBulkIndexer: func(esutil.BulkIndexerConfig) (esutil.BulkIndexer, error) {
+					return &MockBulkIndexer{}, nil
+				},
 				config: &IndexerConfig{
 					Index:     "mock_index",
 					BatchSize: 2,
@@ -148,9 +155,11 @@ func TestBulkAdd(t *testing.T) {
 			convey.So(err, convey.ShouldBeError, fmt.Errorf("[bulkAdd] embedding failed, %w", mockErr))
 		})
 
-		PatchConvey("test len(vectors) != len(texts)", func() {
-			Mock(esutil.NewBulkIndexer).Return(bi, nil).Build()
+		convey.Convey("test len(vectors) != len(texts)", func() {
 			i := &Indexer{
+				newBulkIndexer: func(esutil.BulkIndexerConfig) (esutil.BulkIndexer, error) {
+					return &MockBulkIndexer{}, nil
+				},
 				config: &IndexerConfig{
 					Index:     "mock_index",
 					BatchSize: 2,
@@ -172,16 +181,16 @@ func TestBulkAdd(t *testing.T) {
 			convey.So(err, convey.ShouldBeError, fmt.Errorf("[bulkAdd] invalid vector length, expected=%d, got=%d", 2, 1))
 		})
 
-		PatchConvey("test success", func() {
+		convey.Convey("test success", func() {
 			var mps []esutil.BulkIndexerItem
-			Mock(esutil.NewBulkIndexer).Return(bi, nil).Build()
-			Mock(GetMethod(bi, "Add")).To(func(ctx context.Context, item esutil.BulkIndexerItem) error {
+			bi := &MockBulkIndexer{AddFunc: func(ctx context.Context, item esutil.BulkIndexerItem) error {
 				mps = append(mps, item)
 				return nil
-			}).Build()
-			Mock(GetMethod(bi, "Close")).Return(nil).Build()
-
+			}}
 			i := &Indexer{
+				newBulkIndexer: func(esutil.BulkIndexerConfig) (esutil.BulkIndexer, error) {
+					return bi, nil
+				},
 				config: &IndexerConfig{
 					Index:     "mock_index",
 					BatchSize: 2,
@@ -217,22 +226,20 @@ func TestBulkAdd(t *testing.T) {
 			}
 		})
 
-		PatchConvey("test WithIndex overrides configured index", func() {
+		convey.Convey("test WithIndex overrides configured index", func() {
 			var (
 				mps        []esutil.BulkIndexerItem
 				bulkConfig esutil.BulkIndexerConfig
 			)
-			Mock(esutil.NewBulkIndexer).To(func(cfg esutil.BulkIndexerConfig) (esutil.BulkIndexer, error) {
-				bulkConfig = cfg
-				return bi, nil
-			}).Build()
-			Mock(GetMethod(bi, "Add")).To(func(ctx context.Context, item esutil.BulkIndexerItem) error {
+			bi := &MockBulkIndexer{AddFunc: func(ctx context.Context, item esutil.BulkIndexerItem) error {
 				mps = append(mps, item)
 				return nil
-			}).Build()
-			Mock(GetMethod(bi, "Close")).Return(nil).Build()
-
+			}}
 			i := &Indexer{
+				newBulkIndexer: func(cfg esutil.BulkIndexerConfig) (esutil.BulkIndexer, error) {
+					bulkConfig = cfg
+					return bi, nil
+				},
 				config: &IndexerConfig{
 					Index: "mock_index",
 					DocumentToFields: func(ctx context.Context, doc *schema.Document) (field2Value map[string]FieldValue, err error) {
@@ -256,14 +263,14 @@ func TestBulkAdd(t *testing.T) {
 }
 
 func TestNewIndexer(t *testing.T) {
-	PatchConvey("test NewIndexer", t, func() {
+	convey.Convey("test NewIndexer", t, func() {
 		ctx := context.Background()
 		client := &elasticsearch.Client{}
 		docToFields := func(ctx context.Context, doc *schema.Document) (map[string]FieldValue, error) {
 			return nil, nil
 		}
 
-		PatchConvey("test client is nil", func() {
+		convey.Convey("test client is nil", func() {
 			_, err := NewIndexer(ctx, &IndexerConfig{
 				DocumentToFields: docToFields,
 			})
@@ -271,7 +278,7 @@ func TestNewIndexer(t *testing.T) {
 			convey.So(err.Error(), convey.ShouldContainSubstring, "es client not provided")
 		})
 
-		PatchConvey("test DocumentToFields is nil", func() {
+		convey.Convey("test DocumentToFields is nil", func() {
 			_, err := NewIndexer(ctx, &IndexerConfig{
 				Client: client,
 			})
@@ -279,7 +286,7 @@ func TestNewIndexer(t *testing.T) {
 			convey.So(err.Error(), convey.ShouldContainSubstring, "DocumentToFields method not provided")
 		})
 
-		PatchConvey("test success with defaults", func() {
+		convey.Convey("test success with defaults", func() {
 			idx, err := NewIndexer(ctx, &IndexerConfig{
 				Client:           client,
 				DocumentToFields: docToFields,
@@ -291,7 +298,7 @@ func TestNewIndexer(t *testing.T) {
 			convey.So(idx.IsCallbacksEnabled(), convey.ShouldBeTrue)
 		})
 
-		PatchConvey("test success with custom batch size", func() {
+		convey.Convey("test success with custom batch size", func() {
 			idx, err := NewIndexer(ctx, &IndexerConfig{
 				Client:           client,
 				BatchSize:        10,
@@ -302,7 +309,7 @@ func TestNewIndexer(t *testing.T) {
 			convey.So(idx.config.BatchSize, convey.ShouldEqual, 10)
 		})
 
-		PatchConvey("IndexSpec - index exists", func() {
+		convey.Convey("IndexSpec - index exists", func() {
 			mockT := &mockTransportCreation{
 				existsResponse: &http.Response{
 					StatusCode: 200,
@@ -325,7 +332,7 @@ func TestNewIndexer(t *testing.T) {
 			convey.So(mockT.createCalled, convey.ShouldBeFalse)
 		})
 
-		PatchConvey("IndexSpec - index not exists and create success", func() {
+		convey.Convey("IndexSpec - index not exists and create success", func() {
 			mockT := &mockTransportCreation{
 				existsResponse: &http.Response{
 					StatusCode: 404,
@@ -353,7 +360,7 @@ func TestNewIndexer(t *testing.T) {
 			convey.So(mockT.createCalled, convey.ShouldBeTrue)
 		})
 
-		PatchConvey("IndexSpec - index creation fails", func() {
+		convey.Convey("IndexSpec - index creation fails", func() {
 			mockT := &mockTransportCreation{
 				existsResponse: &http.Response{
 					StatusCode: 404,
@@ -380,7 +387,7 @@ func TestNewIndexer(t *testing.T) {
 			convey.So(err.Error(), convey.ShouldContainSubstring, "create index failed")
 		})
 
-		PatchConvey("IndexSpec - index existence check fails", func() {
+		convey.Convey("IndexSpec - index existence check fails", func() {
 			mockT := &mockTransportCreation{
 				existsResponse: &http.Response{
 					StatusCode: 500,
@@ -405,7 +412,7 @@ func TestNewIndexer(t *testing.T) {
 }
 
 func TestStore(t *testing.T) {
-	PatchConvey("test Store", t, func() {
+	convey.Convey("test Store", t, func() {
 		ctx := context.Background()
 		client := &elasticsearch.Client{}
 		docToFields := func(ctx context.Context, doc *schema.Document) (map[string]FieldValue, error) {
@@ -419,11 +426,12 @@ func TestStore(t *testing.T) {
 		})
 		convey.So(err, convey.ShouldBeNil)
 
-		// Mock NewBulkIndexer to return our MockBulkIndexer
 		mockBI := &MockBulkIndexer{}
-		Mock(esutil.NewBulkIndexer).Return(mockBI, nil).Build()
+		idx.newBulkIndexer = func(esutil.BulkIndexerConfig) (esutil.BulkIndexer, error) {
+			return mockBI, nil
+		}
 
-		PatchConvey("test success", func() {
+		convey.Convey("test success", func() {
 			mockBI.AddFunc = func(ctx context.Context, item esutil.BulkIndexerItem) error {
 				return nil
 			}
@@ -433,7 +441,7 @@ func TestStore(t *testing.T) {
 			convey.So(ids[0], convey.ShouldEqual, "1")
 		})
 
-		PatchConvey("test validation error in bulkAdd", func() {
+		convey.Convey("test validation error in bulkAdd", func() {
 			// Trigger error in bulkAdd by providing embedding but no embedding implementation
 			// To do this, we need to return a field with EmbedKey
 			idx.config.DocumentToFields = func(ctx context.Context, doc *schema.Document) (map[string]FieldValue, error) {
