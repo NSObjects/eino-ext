@@ -202,3 +202,7 @@ type FieldValue struct {
 - [基础索引器](./examples/indexer/)
 - [稀疏向量索引器](./examples/indexer_with_sparse_vector/)
 
+
+## 批量写入错误
+
+BulkIndexer 的请求或单条文档失败回调报告错误时，即使 Close 成功，Store 也返回错误而不是文档 ID。Store 不具备事务原子性：失败前已被 Elasticsearch 确认的文档可能已经写入，返回错误不意味着回滚，也不代表可以无条件重试。
