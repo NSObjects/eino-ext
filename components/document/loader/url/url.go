@@ -43,6 +43,11 @@ type LoaderConfig struct {
 
 	// optional, default GET uri.
 	RequestBuilder func(ctx context.Context, source document.Source, opts ...document.LoaderOption) (*http.Request, error)
+
+	// MaxResponseBytes limits the complete response body read from the client.
+	// Non-positive values use the default of 10 MiB. Oversized responses fail
+	// with ErrResponseTooLarge; partial documents are not returned.
+	MaxResponseBytes int64
 }
 
 func defaultRequestBuilder(ctx context.Context, source document.Source, opts ...document.LoaderOption) (*http.Request, error) {
@@ -106,9 +111,21 @@ func (l *Loader) Load(ctx context.Context, src document.Source, opts ...document
 
 	o := document.GetLoaderCommonOptions(&document.LoaderOptions{}, opts...)
 
-	docs, err = l.conf.Parser.Parse(ctx, readerCloser, append([]parser.Option{parser.WithURI(src.URI)}, o.ParserOptions...)...)
+	body := newLimitedResponseReader(readerCloser, l.conf.MaxResponseBytes)
+	docs, err = l.conf.Parser.Parse(ctx, body, append([]parser.Option{parser.WithURI(src.URI)}, o.ParserOptions...)...)
+	// A parser can replace or swallow an underlying read error. Preserve
+	// the response failure even if parsing itself appears successful.
+	if body.err != nil && body.err != io.EOF {
+		return nil, fmt.Errorf("read response body of uri [%s]: %w", src.URI, body.err)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("parse content of uri [%s] err: %w", src.URI, err)
+	}
+
+	// A successful parser need not consume the whole response. Validate the
+	// remainder before reporting success, using the same bounded reader.
+	if _, err = io.Copy(io.Discard, body); err != nil {
+		return nil, fmt.Errorf("read response body of uri [%s]: %w", src.URI, err)
 	}
 
 	_ = callbacks.OnEnd(ctx, &document.LoaderCallbackOutput{

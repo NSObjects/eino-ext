@@ -1,0 +1,157 @@
+/*
+ * Copyright 2024 CloudWeGo Authors
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package url
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"io"
+	"math"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+
+	"github.com/cloudwego/eino/components/document"
+	"github.com/cloudwego/eino/schema"
+	"github.com/stretchr/testify/require"
+)
+
+type limitReaderFunc func([]byte) (int, error)
+
+func (f limitReaderFunc) Read(p []byte) (int, error) { return f(p) }
+
+func TestLimitedResponseReaderBoundaries(t *testing.T) {
+	for _, tc := range []struct {
+		body  string
+		limit int64
+		want  string
+		err   error
+	}{
+		{"", 3, "", nil},
+		{"ab", 3, "ab", nil},
+		{"abc", 3, "abc", nil},
+		{"abcd", 3, "abc", ErrResponseTooLarge},
+		{"hello", math.MaxInt64, "hello", nil},
+	} {
+		t.Run(fmt.Sprintf("%s/%d", tc.body, tc.limit), func(t *testing.T) {
+			r := newLimitedResponseReader(strings.NewReader(tc.body), tc.limit)
+			data, err := io.ReadAll(r)
+			require.ErrorIs(t, err, tc.err)
+			require.Equal(t, tc.want, string(data))
+			_, err = r.Read(make([]byte, 1))
+			if tc.err != nil {
+				require.ErrorIs(t, err, tc.err)
+			} else {
+				require.ErrorIs(t, err, io.EOF)
+			}
+		})
+	}
+	for _, limit := range []int64{0, -1} {
+		require.Equal(t, defaultMaxResponseBytes, newLimitedResponseReader(strings.NewReader(""), limit).remaining)
+	}
+}
+
+func TestLimitedResponseReaderTerminalReadAndNoProgress(t *testing.T) {
+	t.Run("data with EOF at exact limit", func(t *testing.T) {
+		calls := 0
+		r := newLimitedResponseReader(limitReaderFunc(func(p []byte) (int, error) {
+			calls++
+			return copy(p, "abc"), io.EOF
+		}), 3)
+		data, err := io.ReadAll(r)
+		require.NoError(t, err)
+		require.Equal(t, "abc", string(data))
+		require.Equal(t, 1, calls)
+	})
+	t.Run("temporary empty read during probe", func(t *testing.T) {
+		calls := 0
+		r := newLimitedResponseReader(limitReaderFunc(func(p []byte) (int, error) {
+			calls++
+			switch calls {
+			case 1:
+				return copy(p, "abc"), nil
+			case 2:
+				return 0, nil
+			default:
+				return 0, io.EOF
+			}
+		}), 3)
+		data, err := io.ReadAll(r)
+		require.NoError(t, err)
+		require.Equal(t, "abc", string(data))
+		require.Equal(t, 3, calls)
+	})
+	t.Run("no progress", func(t *testing.T) {
+		r := newLimitedResponseReader(limitReaderFunc(func([]byte) (int, error) {
+			return 0, nil
+		}), 3)
+		_, err := io.ReadAll(r)
+		require.ErrorIs(t, err, io.ErrNoProgress)
+	})
+	t.Run("read error with data", func(t *testing.T) {
+		wantErr := errors.New("broken response")
+		r := newLimitedResponseReader(limitReaderFunc(func(p []byte) (int, error) {
+			return copy(p, "ab"), wantErr
+		}), 3)
+		data, err := io.ReadAll(r)
+		require.Equal(t, "ab", string(data))
+		require.ErrorIs(t, err, wantErr)
+		_, err = r.Read(make([]byte, 1))
+		require.ErrorIs(t, err, wantErr)
+	})
+}
+
+func TestLoadChecksEntireResponseDespiteParserBehavior(t *testing.T) {
+	for _, size := range []int{3, 4} {
+		for _, mode := range []string{"read_all", "ignore_error", "read_one", "no_read"} {
+			t.Run(fmt.Sprintf("%d/%s", size, mode), func(t *testing.T) {
+				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+					_, _ = io.WriteString(w, strings.Repeat("a", size))
+				}))
+				defer server.Close()
+				l, err := NewLoader(context.Background(), &LoaderConfig{
+					MaxResponseBytes: 3,
+					Parser: &MockParser{mock: func(r io.Reader) ([]*schema.Document, error) {
+						switch mode {
+						case "read_all":
+							_, err := io.ReadAll(r)
+							if err != nil {
+								return nil, err
+							}
+						case "ignore_error":
+							_, _ = io.ReadAll(r)
+						case "read_one":
+							_, _ = r.Read(make([]byte, 1))
+						}
+						return []*schema.Document{{Content: "parsed"}}, nil
+					}},
+				})
+				require.NoError(t, err)
+				docs, err := l.Load(context.Background(), document.Source{URI: server.URL})
+				if size > 3 {
+					require.ErrorIs(t, err, ErrResponseTooLarge)
+					require.Nil(t, docs)
+				} else {
+					require.NoError(t, err)
+					require.Len(t, docs, 1)
+				}
+			})
+		}
+	}
+}

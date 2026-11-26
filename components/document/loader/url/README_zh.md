@@ -70,8 +70,15 @@ type LoaderConfig struct {
     // RequestBuilder 自定义 HTTP 请求
     // 可选。默认值：GET 请求构建器
     RequestBuilder func(ctx context.Context, source document.Source, opts ...document.LoaderOption) (*http.Request, error)
+
+    // 完整响应体的最大字节数，默认 10 MiB。
+    MaxResponseBytes int64
 }
 ```
+
+### 响应体大小限制
+
+加载器检查完整响应体，包括 Parser 未读取的剩余内容。MaxResponseBytes 非正值使用默认 10 MiB；较大文档可配置更大的正值。超出限制返回 ErrResponseTooLarge（可通过 errors.Is 判断），不返回部分文档。限制基于 HTTP Client 暴露的响应体字节数，Transport 自动解压时按解压后字节数计算，不限制 Parser 自身的内存分配。新增配置字段后，使用非具名 LoaderConfig 字面量的调用方需要调整。
 
 ## 高级用法
 
