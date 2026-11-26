@@ -514,6 +514,11 @@ partsLoop:
 	for _, part := range inMsg.AssistantGenMultiContent {
 		switch part.Type {
 		case schema.ChatMessagePartTypeText:
+			// Other providers can use an empty text part to carry private metadata
+			// (for example, a Gemini thought signature). It has no OpenAI content.
+			if part.Text == "" {
+				continue
+			}
 			comMessage.MultiContent = append(comMessage.MultiContent, openai.ChatMessagePart{
 				Type: openai.ChatMessagePartTypeText,
 				Text: part.Text,
@@ -541,6 +546,9 @@ partsLoop:
 		default:
 			return openai.ChatCompletionMessage{}, fmt.Errorf("unsupported chat message part type for AssistantGenMultiContent: %s", part.Type)
 		}
+	}
+	if len(comMessage.MultiContent) == 0 && comMessage.Audio == nil {
+		comMessage.Content = inMsg.Content
 	}
 	return comMessage, nil
 }
@@ -717,6 +725,13 @@ func (c *Client) genRequest(ctx context.Context, in []*schema.Message, opts ...m
 
 		if err != nil {
 			return nil, nil, nil, nil, err
+		}
+		// A metadata-only output part must not turn into an empty assistant
+		// message. Keep tool calls, reasoning, audio and fallback text intact.
+		if len(inMsg.AssistantGenMultiContent) > 0 && msg.Content == "" &&
+			len(msg.MultiContent) == 0 && msg.Audio == nil &&
+			len(msg.ToolCalls) == 0 && msg.ReasoningContent == "" {
+			continue
 		}
 		msgs = append(msgs, msg)
 	}
