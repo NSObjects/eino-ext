@@ -18,13 +18,15 @@ package url
 
 import (
 	"context"
-	"fmt"
 	"io"
 	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/cloudwego/eino-ext/components/document/parser/html"
 	"github.com/cloudwego/eino/callbacks"
@@ -44,15 +46,8 @@ func (p *MockParser) Parse(ctx context.Context, reader io.Reader, opts ...parser
 func TestLoad(t *testing.T) {
 	staticDir := "./testdata"
 	fileServer := http.FileServer(http.Dir(staticDir))
-	addr := "127.0.0.1:18001"
-
-	go func() {
-		if err := http.ListenAndServe(addr, fileServer); err != nil {
-			fmt.Println("Server failed to start:", err)
-		}
-	}()
-
-	time.Sleep(1 * time.Second)
+	server := httptest.NewServer(fileServer)
+	defer server.Close()
 	ctx := context.Background()
 	ctx = callbacks.InitCallbacks(ctx, &callbacks.RunInfo{})
 
@@ -60,7 +55,7 @@ func TestLoad(t *testing.T) {
 		loader, err := NewLoader(ctx, &LoaderConfig{})
 		assert.Nil(t, err)
 
-		url := fmt.Sprintf("http://%s/test.html", addr)
+		url := server.URL + "/test.html"
 		docs, err := loader.Load(ctx, document.Source{URI: url})
 		assert.Nil(t, err)
 
@@ -88,14 +83,14 @@ func TestLoad(t *testing.T) {
 		})
 		assert.Nil(t, err)
 
-		url := fmt.Sprintf("http://%s/test.md", addr)
+		url := server.URL + "/test.md"
 		docs, err := loader.Load(ctx, document.Source{
 			URI: url,
 		})
 		assert.Nil(t, err)
 
 		assert.Equal(t, 1, len(docs))
-		assert.Equal(t, "# Title\nhello world", docs[0].Content)
+		assert.Equal(t, "# Title\nhello world", strings.ReplaceAll(docs[0].Content, "\r\n", "\n"))
 	})
 
 	t.Run("custom request builder and custom client", func(t *testing.T) {
@@ -111,7 +106,7 @@ func TestLoad(t *testing.T) {
 		})
 		assert.Nil(t, err)
 
-		url := fmt.Sprintf("http://%s/test.xx", addr)
+		url := server.URL + "/test.xx"
 		docs, err := loader.Load(ctx, document.Source{
 			URI: url,
 		})
