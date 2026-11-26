@@ -39,7 +39,7 @@ func main() {
 	// ...
 
 	embedder, err := cache.NewEmbedder(originalEmbedder,
-		cache.WithCacher(cacheredis.NewCacher(rdb)),            // using Redis as the cache
+		cache.WithCacher(cacheredis.NewCacher(rdb, cacheredis.WithPrefix("app:embedding:v2:provider-model"))),            // using Redis as the cache
 		cache.WithGenerator(cache.NewHashGenerator(md5.New())), // using md5 for generating unique keys
 	)
 	if err != nil {
@@ -62,6 +62,14 @@ func main() {
   - Currently, [Redis](./redis) is supported.
 - **Generator**: The cache embedder uses a generator to create unique keys for caching embeddings.
   - Currently, a simple generator and a hash generator base on hash.Hash interface are supported.
+
+## Cache key format and migration
+
+The built-in generators use versioned keys. SimpleGenerator encodes the byte length of the text before the text and model; HashGenerator hashes this encoding and adds a version prefix to the digest. This avoids ambiguous text/model boundaries. Both formats change existing cache keys. A version marker in the generated key alone does not isolate arbitrary legacy string keys; use a separate backend namespace that cannot overlap with keys written by the previous configuration. For Redis, prefer a dedicated database or instance if the previous prefix or inputs were unconstrained.
+
+Use a **new cache namespace** when upgrading (for Redis, set a new prefix using `cacheredis.WithPrefix`). Do not fall back to old keys: their ambiguous encoding may already associate an incorrect vector with an input. Allow old entries to expire or remove only the dedicated old namespace under your operational policy. The library does not delete old keys.
+
+Use separate namespaces for different embedding providers, default models, dimensions, or other vector-affecting configuration. The built-in generator only sees text and the explicitly supplied model option; it cannot infer the underlying embedder's default configuration. Custom generators are unchanged.
 
 ## Examples
 

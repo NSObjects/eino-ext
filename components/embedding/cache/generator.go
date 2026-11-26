@@ -35,7 +35,7 @@ type Generator interface {
 }
 
 // SimpleGenerator is a concrete implementation of the Generator interface that generates
-// a simple key by concatenating the text and model without hashing.
+// a versioned, length-prefixed key from the text and model without hashing.
 type SimpleGenerator struct{}
 
 var _ Generator = (*SimpleGenerator)(nil)
@@ -46,16 +46,17 @@ func NewSimpleGenerator() *SimpleGenerator {
 }
 
 func (g *SimpleGenerator) Generate(_ context.Context, text string, opt GeneratorOption) string {
-	return fmt.Sprintf("%s-%s", text, opt.Model)
+	// A byte length identifies the text/model boundary even for arbitrary strings.
+	return fmt.Sprintf("v2:s:%d:%s%s", len(text), text, opt.Model)
 }
 
 // HashGenerator is a concrete implementation of the [Generator] interface that uses a hash function
 // to generate a unique key based on the provided text and optional embedding options.
 // It wraps a [SimpleGenerator] and applies a hash function to the generated key.
 //
-// The generated key is the hex encoded digest of the wrapped generator's output, so it has a
-// constant length that depends only on the hash function, never on the input length. The
-// key no longer directly contains the plaintext, but hashing alone does not
+// The generated key is a version prefix followed by the hex encoded digest of the wrapped
+// generator's output. Its length depends only on the prefix and hash function, never
+// on the input length. The key no longer directly contains plaintext, but hashing alone does not
 // guarantee confidentiality of predictable inputs.
 //
 // Note: Because of the use of the [hash.Hash] algorithm, there is a probability that data
@@ -95,5 +96,5 @@ func (g *HashGenerator) Generate(ctx context.Context, text string, opt Generator
 	// hash.Hash.Write never returns an error.
 	_, _ = g.hasher.Write([]byte(plainText))
 
-	return fmt.Sprintf("%x", g.hasher.Sum(nil))
+	return fmt.Sprintf("v2:h:%x", g.hasher.Sum(nil))
 }

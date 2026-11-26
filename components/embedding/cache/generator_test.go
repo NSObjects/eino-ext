@@ -70,9 +70,9 @@ func TestGenerator_SimpleGenerator(t *testing.T) {
 	opt := GeneratorOption{}
 
 	generator := NewSimpleGenerator()
-	assert.Equal(t, generator.Generate(ctx, text, GeneratorOption{Model: model}), text+"-"+model)
-	assert.Equal(t, generator.Generate(ctx, text, opt), text+"-")
-	assert.Equal(t, generator.Generate(ctx, "", opt), "-")
+	assert.Equal(t, generator.Generate(ctx, text, GeneratorOption{Model: model}), "v2:s:9:test texttest-model")
+	assert.Equal(t, generator.Generate(ctx, text, opt), "v2:s:9:test text")
+	assert.Equal(t, generator.Generate(ctx, "", opt), "v2:s:0:")
 }
 
 func TestGenerator_HashGenerator(t *testing.T) {
@@ -113,7 +113,7 @@ func TestGenerator_HashGeneratorProducesDigest(t *testing.T) {
 			name:    "sha256",
 			text:    "test text",
 			model:   "test-model",
-			wantLen: 64,
+			wantLen: 69,
 			digest: func(plain string) string {
 				sum := sha256.Sum256([]byte(plain))
 				return hex.EncodeToString(sum[:])
@@ -123,7 +123,7 @@ func TestGenerator_HashGeneratorProducesDigest(t *testing.T) {
 			name:    "md5",
 			text:    "test text",
 			model:   "test-model",
-			wantLen: 32,
+			wantLen: 37,
 			digest: func(plain string) string {
 				sum := md5.Sum([]byte(plain))
 				return hex.EncodeToString(sum[:])
@@ -138,13 +138,13 @@ func TestGenerator_HashGeneratorProducesDigest(t *testing.T) {
 				generator = NewHashGenerator(md5.New())
 			}
 
-			plainText := tc.text + "-" + tc.model
+			plainText := "v2:s:9:test texttest-model"
 			key := generator.Generate(ctx, tc.text, GeneratorOption{Model: tc.model})
 
-			assert.Equal(t, tc.digest(plainText), key, "key must be the digest of the wrapped generator output")
+			assert.Equal(t, "v2:h:"+tc.digest(plainText), key, "key must be the digest of the wrapped generator output")
 			assert.Len(t, key, tc.wantLen, "hash keys must have the digest's fixed length")
 
-			// The cached text must not be recoverable from the key: a key that embeds the
+			// The key must not directly contain the cached text: a key that embeds the
 			// plaintext leaks prompt and document content into the cache key space.
 			assert.NotContains(t, key, hex.EncodeToString([]byte(tc.text)))
 			assert.NotContains(t, key, tc.text)
@@ -162,8 +162,8 @@ func TestGenerator_HashGeneratorKeyLengthIsIndependentOfInput(t *testing.T) {
 	shortKey := generator.Generate(ctx, "a", GeneratorOption{})
 	longKey := generator.Generate(ctx, strings.Repeat("a", 4096), GeneratorOption{})
 
-	assert.Len(t, shortKey, 64)
-	assert.Len(t, longKey, 64, "key length must not grow with the input")
+	assert.Len(t, shortKey, 69)
+	assert.Len(t, longKey, 69, "key length must not grow with the input")
 	assert.NotEqual(t, shortKey, longKey)
 }
 
@@ -180,8 +180,8 @@ func TestGenerator_HashGeneratorRepeatedCalls(t *testing.T) {
 	assert.NotEqual(t, first, second)
 	assert.Equal(t, first, firstAgain, "hashing the same input again must produce the same key")
 
-	sum := sha256.Sum256([]byte("first-"))
-	assert.Equal(t, hex.EncodeToString(sum[:]), first)
+	sum := sha256.Sum256([]byte("v2:s:5:first"))
+	assert.Equal(t, "v2:h:"+hex.EncodeToString(sum[:]), first)
 }
 
 // TestGenerator_HashGeneratorConcurrent guards the shared hash.Hash. Generate is reachable
@@ -197,8 +197,8 @@ func TestGenerator_HashGeneratorConcurrent(t *testing.T) {
 		text := fmt.Sprintf("text-%d", i)
 		inputs = append(inputs, text)
 
-		sum := sha256.Sum256([]byte(text + "-"))
-		want[text] = hex.EncodeToString(sum[:])
+		sum := sha256.Sum256([]byte(fmt.Sprintf("v2:s:%d:%s", len(text), text)))
+		want[text] = "v2:h:" + hex.EncodeToString(sum[:])
 	}
 
 	const workers = 8
@@ -225,4 +225,40 @@ func TestGenerator_HashGeneratorConcurrent(t *testing.T) {
 	for err := range errs {
 		t.Error(err)
 	}
+}
+
+
+func TestGeneratorUnambiguousTextModelBoundary(t *testing.T) {
+	ctx := context.Background()
+	inputs := []struct {
+		text  string
+		model string
+	}{
+		{"a-b", "c"},
+		{"a", "b-c"},
+		{"", "-"},
+		{"-", ""},
+		{"a:b", "c"},
+		{"a", ":bc"},
+		{"", ""},
+		{"你好", "模型"},
+		{"\x00", "a"},
+		{"", "\x00a"},
+		{string([]byte{0xff}), ""},
+		{"\uFFFD", ""},
+	}
+	for _, generator := range []Generator{NewSimpleGenerator(), NewHashGenerator(sha256.New())} {
+		keys := make(map[string]int)
+		for i, input := range inputs {
+			opt := GeneratorOption{Model: input.model}
+			key := generator.Generate(ctx, input.text, opt)
+			if previous, ok := keys[key]; ok {
+				t.Fatalf("%T: inputs %d and %d share a key", generator, previous, i)
+			}
+			keys[key] = i
+			assert.Equal(t, key, generator.Generate(ctx, input.text, opt))
+		}
+	}
+	simple := NewSimpleGenerator()
+	assert.Equal(t, "v2:s:6:你好模型", simple.Generate(ctx, "你好", GeneratorOption{Model: "模型"}))
 }
