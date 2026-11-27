@@ -44,20 +44,27 @@ func TestLoadClosesBodyBeforeTerminalCallback(t *testing.T) {
 	parseErr := errors.New("parse failure")
 	closeErr := errors.New("close failure")
 	for _, tc := range []struct {
-		name     string
-		parseErr error
-		closeErr error
-		wantErr  error
+		name       string
+		parseErr   error
+		closeErr   error
+		wantErr    error
+		bodyReader io.Reader
+		limit      int64
 	}{
 		{name: "success"},
 		{name: "close failure", closeErr: closeErr, wantErr: closeErr},
 		{name: "parse failure", parseErr: parseErr, wantErr: parseErr},
 		{name: "both fail", parseErr: parseErr, closeErr: closeErr, wantErr: parseErr},
+		{name: "overflow and close fail", closeErr: closeErr, wantErr: ErrResponseTooLarge, limit: 3},
+		{name: "read and close fail", closeErr: closeErr, wantErr: io.ErrUnexpectedEOF, bodyReader: limitReaderFunc(func([]byte) (int, error) { return 0, io.ErrUnexpectedEOF })},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			body := &closeErrorBody{
 				statusTrackingBody: statusTrackingBody{reader: strings.NewReader("content")},
 				err:                tc.closeErr,
+			}
+			if tc.bodyReader != nil {
+				body.reader = tc.bodyReader
 			}
 			var events []string
 			var callbackErr error
@@ -80,13 +87,16 @@ func TestLoadClosesBodyBeforeTerminalCallback(t *testing.T) {
 				}).Build()
 			ctx := callbacks.InitCallbacks(context.Background(), &callbacks.RunInfo{}, handler)
 			l, err := NewLoader(ctx, &LoaderConfig{
+				MaxResponseBytes: tc.limit,
 				Client: &http.Client{Transport: statusTransportFunc(func(req *http.Request) (*http.Response, error) {
 					return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: body, Request: req}, nil
 				})},
 				Parser: &MockParser{mock: func(r io.Reader) ([]*schema.Document, error) {
 					data, err := io.ReadAll(r)
-					require.NoError(t, err)
 					require.Zero(t, body.closes)
+					if err != nil {
+						return nil, err
+					}
 					if tc.parseErr != nil {
 						return nil, tc.parseErr
 					}
@@ -101,7 +111,7 @@ func TestLoadClosesBodyBeforeTerminalCallback(t *testing.T) {
 				require.Nil(t, docs)
 				require.Equal(t, []string{"start", "error"}, events)
 				require.Equal(t, err, callbackErr)
-				if tc.parseErr != nil {
+				if tc.wantErr != closeErr {
 					require.NotErrorIs(t, err, closeErr)
 				}
 			} else {

@@ -86,8 +86,9 @@ type FieldValue struct {
 
 // Indexer implements the [indexer.Indexer] interface for Elasticsearch 9.x.
 type Indexer struct {
-	client *elasticsearch.Client
-	config *IndexerConfig
+	client         *elasticsearch.Client
+	config         *IndexerConfig
+	newBulkIndexer func(esutil.BulkIndexerConfig) (esutil.BulkIndexer, error)
 }
 
 // NewIndexer creates a new ES9 indexer with the provided configuration.
@@ -182,7 +183,11 @@ func (i *Indexer) bulkAdd(ctx context.Context, docs []*schema.Document, options 
 		effectiveIndex = *options.Index
 	}
 
-	bi, err := esutil.NewBulkIndexer(esutil.BulkIndexerConfig{
+	newBulkIndexer := i.newBulkIndexer
+	if newBulkIndexer == nil {
+		newBulkIndexer = esutil.NewBulkIndexer
+	}
+	bi, err := newBulkIndexer(esutil.BulkIndexerConfig{
 		Index:  effectiveIndex,
 		Client: i.client,
 	})
