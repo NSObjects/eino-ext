@@ -136,10 +136,11 @@ func NewIndexer(ctx context.Context, conf *IndexerConfig) (*Indexer, error) {
 				_ = createRes.Body.Close()
 			}
 			if createRes.IsError() {
-				return nil, fmt.Errorf("[NewIndexer] create index failed, response: %s", createRes.String())
+				// Status is safe after Close; String reads and closes the body again.
+				return nil, fmt.Errorf("[NewIndexer] create index failed, HTTP status: %s", createRes.Status())
 			}
 		} else if existsRes.IsError() {
-			return nil, fmt.Errorf("[NewIndexer] check index existence failed, response: %s", existsRes.String())
+			return nil, fmt.Errorf("[NewIndexer] check index existence failed, HTTP status: %s", existsRes.Status())
 		}
 	}
 
