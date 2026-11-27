@@ -85,6 +85,10 @@ type LoaderConfig struct {
 
 加载器检查完整响应体，包括 Parser 未读取的剩余内容。MaxResponseBytes 非正值使用默认 10 MiB；较大文档可配置更大的正值。超出限制返回 ErrResponseTooLarge（可通过 errors.Is 判断），不返回部分文档。限制基于 HTTP Client 暴露的响应体字节数，Transport 自动解压时按解压后字节数计算，不限制 Parser 自身的内存分配。新增配置字段后，使用非具名 LoaderConfig 字面量的调用方需要调整。
 
+### 响应体生命周期
+
+加载器在报告成功前关闭响应体。解析成功但关闭失败时，Load 返回关闭错误，不返回文档；若此前已有加载或解析错误，则保留原始错误优先。加载器不会重试 Close。
+
 ## 高级用法
 
 ### 使用代理的自定义 HTTP 客户端

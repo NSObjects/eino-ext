@@ -86,6 +86,10 @@ Only final HTTP responses with a 2xx status are passed to the parser. Other stat
 
 The loader checks the complete response body, including bytes left unread by the parser. Non-positive MaxResponseBytes values use the 10 MiB default; configure a larger positive value for larger documents. An oversized response fails with ErrResponseTooLarge (inspect with errors.Is), without returning partial documents. The limit counts bytes exposed by the HTTP client's response body, including decompressed bytes when the transport decompresses the response. It does not bound allocations made internally by a parser. Adding this config field requires updating unkeyed LoaderConfig literals.
 
+### Response body ownership
+
+The loader closes the response body before reporting successful completion. If closing fails after a successful parse, Load returns the close error instead of documents. If an earlier load or parse error occurs, that error remains primary. The loader does not retry Close.
+
 ## Advanced Usage
 
 ### Custom HTTP Client with Proxy
