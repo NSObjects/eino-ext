@@ -43,10 +43,11 @@ func TestBulkAddAlwaysJoinsWorkers(t *testing.T) {
 			var cfg esutil.BulkIndexerConfig
 			created, closed := 0, 0
 			bi := &MockBulkIndexer{
-				AddFunc: func(context.Context, esutil.BulkIndexerItem) error {
+				AddFunc: func(ctx context.Context, item esutil.BulkIndexerItem) error {
 					if mode == "add" {
 						return primary
 					}
+					item.OnSuccess(ctx, item, esutil.BulkIndexerResponseItem{Status: 201})
 					return nil
 				},
 				CloseFunc: func(joinCtx context.Context) error {

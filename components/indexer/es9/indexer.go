@@ -198,6 +198,7 @@ func (i *Indexer) bulkAdd(ctx context.Context, docs []*schema.Document, options 
 	// potentially unbounded error data. Multiple workers may report failures.
 	var failureMu sync.Mutex
 	var firstFailure error
+	var confirmed int
 	recordFailure := func(err error) {
 		if err == nil {
 			return
@@ -283,6 +284,17 @@ func (i *Indexer) bulkAdd(ctx context.Context, docs []*schema.Document, options 
 				Action:     "index",
 				DocumentID: t.id,
 				Body:       bytes.NewReader(b),
+				OnSuccess: func(_ context.Context, item esutil.BulkIndexerItem, res esutil.BulkIndexerResponseItem) {
+					// The SDK accepts statuses <= 201, including zero from a
+					// malformed item. Only acknowledge valid index responses.
+					if res.Status != 200 && res.Status != 201 {
+						recordFailure(fmt.Errorf("document %q: invalid bulk success status %d", item.DocumentID, res.Status))
+						return
+					}
+					failureMu.Lock()
+					confirmed++
+					failureMu.Unlock()
+				},
 				OnFailure: func(ctx context.Context, item esutil.BulkIndexerItem, res esutil.BulkIndexerResponseItem, err error) {
 					if err != nil {
 						recordFailure(fmt.Errorf("document %q: %w", item.DocumentID, err))
@@ -384,6 +396,9 @@ func (i *Indexer) bulkAdd(ctx context.Context, docs []*schema.Document, options 
 	defer failureMu.Unlock()
 	if firstFailure != nil {
 		return fmt.Errorf("[bulkAdd] bulk write failed: %w", firstFailure)
+	}
+	if confirmed != len(docs) {
+		return fmt.Errorf("[bulkAdd] incomplete bulk acknowledgment: expected %d, got %d", len(docs), confirmed)
 	}
 	return nil
 }
