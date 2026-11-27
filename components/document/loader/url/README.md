@@ -72,12 +72,19 @@ type LoaderConfig struct {
     // RequestBuilder customizes the HTTP request
     // Optional. Default: GET request builder
     RequestBuilder func(ctx context.Context, source document.Source, opts ...document.LoaderOption) (*http.Request, error)
+
+    // Maximum complete response body size in bytes. Default: 10 MiB.
+    MaxResponseBytes int64
 }
 ```
 
 ### HTTP response status
 
 Only final HTTP responses with a 2xx status are passed to the parser. Other statuses return an error and the response body is closed without parsing. Error response contents are not included in the returned error. Redirect handling remains controlled by the HTTP client. Applications that previously loaded non-2xx bodies must handle this behavior change.
+
+### Response size limit
+
+The loader checks the complete response body, including bytes left unread by the parser. Non-positive MaxResponseBytes values use the 10 MiB default; configure a larger positive value for larger documents. An oversized response fails with ErrResponseTooLarge (inspect with errors.Is), without returning partial documents. The limit counts bytes exposed by the HTTP client's response body, including decompressed bytes when the transport decompresses the response. It does not bound allocations made internally by a parser. Adding this config field requires updating unkeyed LoaderConfig literals.
 
 ## Advanced Usage
 
