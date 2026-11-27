@@ -210,3 +210,7 @@ BulkIndexer 的请求或单条文档失败回调报告错误时，即使 Close �
 ## Worker 生命周期与取消
 
 每次 Store 独立持有 BulkIndexer，Flush HTTP 请求继承 Store 的 Context。映射、向量化或入队失败时，先取消 Flush Context，再关闭队列并等待 Worker 退出，保留原始错误。成功路径在最终 Flush 完成后回收 Worker。已发送的写入无法回滚，不响应 Context 取消的自定义 Transport 仍可能阻塞退出，调用方应合理设置 Store 与客户端超时。
+
+## 批量写入确认
+
+Store 成功要求每条输入文档均收到成功的 index 响应（单条状态码 200 或 201）。确认缺失或成功状态码无效时，即使批量请求返回 HTTP 200，仍返回错误而不是文档 ID。此检查在 SDK Worker 结束后检测确认缺失，不能防止 SDK 内部的所有畸形响应问题（例如响应条目过多）。

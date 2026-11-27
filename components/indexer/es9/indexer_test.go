@@ -185,6 +185,7 @@ func TestBulkAdd(t *testing.T) {
 			var mps []esutil.BulkIndexerItem
 			bi := &MockBulkIndexer{AddFunc: func(ctx context.Context, item esutil.BulkIndexerItem) error {
 				mps = append(mps, item)
+				item.OnSuccess(ctx, item, esutil.BulkIndexerResponseItem{Status: 201})
 				return nil
 			}}
 			i := &Indexer{
@@ -233,6 +234,7 @@ func TestBulkAdd(t *testing.T) {
 			)
 			bi := &MockBulkIndexer{AddFunc: func(ctx context.Context, item esutil.BulkIndexerItem) error {
 				mps = append(mps, item)
+				item.OnSuccess(ctx, item, esutil.BulkIndexerResponseItem{Status: 201})
 				return nil
 			}}
 			i := &Indexer{
@@ -433,6 +435,7 @@ func TestStore(t *testing.T) {
 
 		convey.Convey("test success", func() {
 			mockBI.AddFunc = func(ctx context.Context, item esutil.BulkIndexerItem) error {
+				item.OnSuccess(ctx, item, esutil.BulkIndexerResponseItem{Status: 201})
 				return nil
 			}
 			ids, err := idx.Store(ctx, []*schema.Document{{ID: "1", Content: "test"}})
