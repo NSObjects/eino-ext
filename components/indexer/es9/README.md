@@ -206,3 +206,5 @@ See the following examples for more usage:
 ## Bulk write failures
 
 Store returns an error and no IDs when the bulk indexer's request or item failure callbacks report a failure, even if Close itself succeeds. A failed Store is not transactional: documents acknowledged by Elasticsearch before the failure may already have been written. The error does not imply rollback or safe unconditional retry.
+
+Index existence and creation failures report the HTTP status without copying the server's raw response body into the returned error. This avoids reading closed bodies and exposing arbitrary server response contents. Each setup response body is closed once.
