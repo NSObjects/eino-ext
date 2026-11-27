@@ -202,3 +202,7 @@ See the following examples for more usage:
 - [Basic Indexer](./examples/indexer/)
 - [Sparse Vector Indexer](./examples/indexer_with_sparse_vector/)
 
+
+## Bulk write failures
+
+Store returns an error and no IDs when the bulk indexer's request or item failure callbacks report a failure, even if Close itself succeeds. A failed Store is not transactional: documents acknowledged by Elasticsearch before the failure may already have been written. The error does not imply rollback or safe unconditional retry.

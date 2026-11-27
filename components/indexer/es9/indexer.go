@@ -21,7 +21,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
+	"sync"
 
 	"github.com/cloudwego/eino/callbacks"
 	"github.com/cloudwego/eino/components"
@@ -187,9 +187,27 @@ func (i *Indexer) bulkAdd(ctx context.Context, docs []*schema.Document, options 
 	if newBulkIndexer == nil {
 		newBulkIndexer = esutil.NewBulkIndexer
 	}
+	// The SDK reports asynchronous bulk failures via callbacks rather than
+	// Close's return value. Retain the first failure without accumulating
+	// potentially unbounded error data. Multiple workers may report failures.
+	var failureMu sync.Mutex
+	var firstFailure error
+	recordFailure := func(err error) {
+		if err == nil {
+			return
+		}
+		failureMu.Lock()
+		defer failureMu.Unlock()
+		if firstFailure == nil {
+			firstFailure = err
+		}
+	}
 	bi, err := newBulkIndexer(esutil.BulkIndexerConfig{
 		Index:  effectiveIndex,
 		Client: i.client,
+		OnError: func(_ context.Context, err error) {
+			recordFailure(err)
+		},
 	})
 	if err != nil {
 		return err
@@ -236,9 +254,9 @@ func (i *Indexer) bulkAdd(ctx context.Context, docs []*schema.Document, options 
 				Body:       bytes.NewReader(b),
 				OnFailure: func(ctx context.Context, item esutil.BulkIndexerItem, res esutil.BulkIndexerResponseItem, err error) {
 					if err != nil {
-						log.Printf("ERROR: %s", err)
+						recordFailure(fmt.Errorf("document %q: %w", item.DocumentID, err))
 					} else {
-						log.Printf("ERROR: %s: %s", res.Error.Type, res.Error.Reason)
+						recordFailure(fmt.Errorf("document %q: bulk item failed (status %d, type %q)", item.DocumentID, res.Status, res.Error.Type))
 					}
 				},
 			}); err != nil {
@@ -322,7 +340,15 @@ func (i *Indexer) bulkAdd(ctx context.Context, docs []*schema.Document, options 
 		}
 	}
 
-	return bi.Close(ctx)
+	if err := bi.Close(ctx); err != nil {
+		return err
+	}
+	failureMu.Lock()
+	defer failureMu.Unlock()
+	if firstFailure != nil {
+		return fmt.Errorf("[bulkAdd] bulk write failed: %w", firstFailure)
+	}
+	return nil
 }
 
 func (i *Indexer) makeEmbeddingCtx(ctx context.Context, emb embedding.Embedder) context.Context {
