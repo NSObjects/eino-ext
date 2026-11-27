@@ -23,6 +23,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -200,5 +201,81 @@ func TestStoreCancelsRealBulkRequestAndJoins(t *testing.T) {
 	case <-ended:
 	case <-time.After(3 * time.Second):
 		t.Fatal("server did not observe canceled request")
+	}
+}
+
+func TestStoreAbortsQueuedBulkItemsOnLaterMappingFailure(t *testing.T) {
+	primary := errors.New("later mapping failed")
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		w.Header().Set("X-Elastic-Product", "Elasticsearch")
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = io.WriteString(w, `{"error":"unexpected bulk request","status":400}`)
+	}))
+	defer server.Close()
+	client, err := elasticsearch.NewClient(elasticsearch.Config{
+		Addresses:    []string{server.URL},
+		DisableRetry: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	idx, err := NewIndexer(ctx, &IndexerConfig{
+		Client:    client,
+		Index:     "test",
+		BatchSize: 1,
+		Embedding: &mockEmbedding{size: []int{1}, mockVector: []float64{1}},
+		DocumentToFields: func(_ context.Context, doc *schema.Document) (map[string]FieldValue, error) {
+			if doc.ID == "3" {
+				return nil, primary
+			}
+			return map[string]FieldValue{"content": {Value: doc.Content, EmbedKey: "vector"}}, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var bulk esutil.BulkIndexer
+	var flushes, canceledFlushes atomic.Int32
+	idx.newBulkIndexer = func(cfg esutil.BulkIndexerConfig) (esutil.BulkIndexer, error) {
+		// Force the first queued item to remain buffered until Close.
+		cfg.NumWorkers = 1
+		cfg.FlushInterval = time.Hour
+		cfg.FlushBytes = 1 << 20
+		cfg.OnFlushEnd = func(flushCtx context.Context) {
+			flushes.Add(1)
+			if errors.Is(flushCtx.Err(), context.Canceled) {
+				canceledFlushes.Add(1)
+			}
+		}
+		var err error
+		bulk, err = esutil.NewBulkIndexer(cfg)
+		return bulk, err
+	}
+	// Mapping doc 2 fills a new batch and enqueues doc 1. Doc 3 fails
+	// before doc 2 is enqueued. A canceled final flush must still finish
+	// the worker lifecycle without transmitting the previously queued item.
+	ids, err := idx.Store(ctx, []*schema.Document{
+		{ID: "1", Content: "first"},
+		{ID: "2", Content: "second"},
+		{ID: "3", Content: "third"},
+	})
+	if !errors.Is(err, primary) || ids != nil {
+		t.Fatalf("expected original mapping failure, got ids=%v err=%v", ids, err)
+	}
+	if bulk == nil || bulk.Stats().NumAdded != 1 {
+		t.Fatal("test must enqueue one real SDK item before the failure")
+	}
+	if flushes.Load() != 1 || canceledFlushes.Load() != 1 {
+		t.Fatalf("expected joined canceled final flush, got total=%d canceled=%d", flushes.Load(), canceledFlushes.Load())
+	}
+	if requests.Load() != 0 {
+		t.Fatalf("abort transmitted queued items: requests=%d", requests.Load())
+	}
+	if ctx.Err() != nil {
+		t.Fatalf("aborting workers must not cancel caller's context: %v", ctx.Err())
 	}
 }
