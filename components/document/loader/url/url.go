@@ -119,7 +119,13 @@ func (l *Loader) Load(ctx context.Context, src document.Source, opts ...document
 	if err != nil {
 		return nil, fmt.Errorf("failed to load content from uri [%s]: %w", src.URI, err)
 	}
-	defer readerCloser.Close()
+	closed := false
+	defer func() {
+		if !closed {
+			// Preserve the original load or parse error on failure paths.
+			_ = readerCloser.Close()
+		}
+	}()
 
 	o := document.GetLoaderCommonOptions(&document.LoaderOptions{}, opts...)
 
@@ -138,6 +144,13 @@ func (l *Loader) Load(ctx context.Context, src document.Source, opts ...document
 	// remainder before reporting success, using the same bounded reader.
 	if _, err = io.Copy(io.Discard, body); err != nil {
 		return nil, fmt.Errorf("read response body of uri [%s]: %w", src.URI, err)
+	}
+
+	// A successful Load must release its response before reporting success.
+	// Mark it closed before calling Close so even a failure is never retried.
+	closed = true
+	if closeErr := readerCloser.Close(); closeErr != nil {
+		return nil, fmt.Errorf("failed to close response body of uri [%s]: %w", src.URI, closeErr)
 	}
 
 	_ = callbacks.OnEnd(ctx, &document.LoaderCallbackOutput{
