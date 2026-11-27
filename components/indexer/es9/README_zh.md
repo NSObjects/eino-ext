@@ -206,3 +206,7 @@ type FieldValue struct {
 ## 批量写入错误
 
 BulkIndexer 的请求或单条文档失败回调报告错误时，即使 Close 成功，Store 也返回错误而不是文档 ID。Store 不具备事务原子性：失败前已被 Elasticsearch 确认的文档可能已经写入，返回错误不意味着回滚，也不代表可以无条件重试。
+
+## Worker 生命周期与取消
+
+每次 Store 独立持有 BulkIndexer，Flush HTTP 请求继承 Store 的 Context。映射、向量化或入队失败时，先取消 Flush Context，再关闭队列并等待 Worker 退出，保留原始错误。成功路径在最终 Flush 完成后回收 Worker。已发送的写入无法回滚，不响应 Context 取消的自定义 Transport 仍可能阻塞退出，调用方应合理设置 Store 与客户端超时。

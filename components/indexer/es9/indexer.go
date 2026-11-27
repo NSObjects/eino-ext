@@ -177,6 +177,12 @@ func (i *Indexer) Store(ctx context.Context, docs []*schema.Document, opts ...in
 }
 
 func (i *Indexer) bulkAdd(ctx context.Context, docs []*schema.Document, options *indexer.Options) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	flushCtx, cancelFlush := context.WithCancel(ctx)
+	defer cancelFlush()
+
 	emb := options.Embedding
 	effectiveIndex := i.config.Index
 	if options.Index != nil {
@@ -205,6 +211,11 @@ func (i *Indexer) bulkAdd(ctx context.Context, docs []*schema.Document, options 
 	bi, err := newBulkIndexer(esutil.BulkIndexerConfig{
 		Index:  effectiveIndex,
 		Client: i.client,
+		// SDK workers start with context.Background; bind each flush to
+		// this Store invocation, including the final flush during Close.
+		OnFlushStart: func(context.Context) context.Context {
+			return flushCtx
+		},
 		OnError: func(_ context.Context, err error) {
 			recordFailure(err)
 		},
@@ -212,6 +223,23 @@ func (i *Indexer) bulkAdd(ctx context.Context, docs []*schema.Document, options 
 	if err != nil {
 		return err
 	}
+
+	// SDK Close closes the queue and joins its workers only when its
+	// argument is not already canceled. Use a non-cancelable join context;
+	// the actual HTTP flushes still use the cancelable flushCtx above.
+	closed := false
+	closeWorkers := func() error {
+		closed = true
+		return bi.Close(context.WithoutCancel(ctx))
+	}
+	defer func() {
+		if !closed {
+			// Stop further flush requests on mapping/embedding/Add failure
+			// (or panic) before draining the queue. Keep the original error.
+			cancelFlush()
+			_ = closeWorkers()
+		}
+	}()
 
 	var (
 		tuples []tuple
@@ -247,6 +275,9 @@ func (i *Indexer) bulkAdd(ctx context.Context, docs []*schema.Document, options 
 				return fmt.Errorf("[bulkAdd] marshal bulk item failed, %w", err)
 			}
 
+			if err := ctx.Err(); err != nil {
+				return err
+			}
 			if err = bi.Add(ctx, esutil.BulkIndexerItem{
 				Index:      effectiveIndex,
 				Action:     "index",
@@ -271,6 +302,9 @@ func (i *Indexer) bulkAdd(ctx context.Context, docs []*schema.Document, options 
 	}
 
 	for idx := range docs {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		doc := docs[idx]
 		fields, err := i.config.DocumentToFields(ctx, doc)
 		if err != nil {
@@ -340,7 +374,10 @@ func (i *Indexer) bulkAdd(ctx context.Context, docs []*schema.Document, options 
 		}
 	}
 
-	if err := bi.Close(ctx); err != nil {
+	if err := closeWorkers(); err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
 		return err
 	}
 	failureMu.Lock()

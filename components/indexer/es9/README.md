@@ -206,3 +206,7 @@ See the following examples for more usage:
 ## Bulk write failures
 
 Store returns an error and no IDs when the bulk indexer's request or item failure callbacks report a failure, even if Close itself succeeds. A failed Store is not transactional: documents acknowledged by Elasticsearch before the failure may already have been written. The error does not imply rollback or safe unconditional retry.
+
+## Worker lifetime and cancellation
+
+Each Store owns its bulk indexer. Flush HTTP requests inherit the Store context. On a mapping, embedding or enqueue failure, the indexer cancels the flush context before closing the queue and joining workers; the original error remains primary. Successful calls join workers after the final flush. Already transmitted writes cannot be rolled back, and a custom transport that ignores context cancellation can still block shutdown. Configure appropriate deadlines on Store and the client.
